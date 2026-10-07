@@ -1,0 +1,218 @@
+{
+ "categories": [
+  {
+   "key": "napkins",
+   "label": "Napkins",
+   "sort": 0
+  },
+  {
+   "key": "placemats",
+   "label": "Placemats",
+   "sort": 1
+  },
+  {
+   "key": "coasters",
+   "label": "Trays & Coasters",
+   "sort": 2
+  },
+  {
+   "key": "custom",
+   "label": "Custom Pieces",
+   "sort": 3
+  }
+ ],
+ "products": [
+  {
+   "id": 1,
+   "name": "Olive Leaf Napkin",
+   "cat": "napkins",
+   "price": 45,
+   "stock": 39,
+   "img": "images/napkins.jpg",
+   "desc": "Linen napkin with hand-finished olive leaf embroidery.",
+   "active": 1
+  },
+  {
+   "id": 2,
+   "name": "Scalloped Sage Placemat",
+   "cat": "placemats",
+   "price": 85,
+   "stock": 21,
+   "img": "images/placemat-1.jpg",
+   "desc": "Scalloped-edge placemat in soft sage.",
+   "active": 1
+  },
+  {
+   "id": 3,
+   "name": "Sage & Linen Placemat Set",
+   "cat": "placemats",
+   "price": 160,
+   "stock": 9,
+   "img": "images/placemat-2.jpg",
+   "desc": "Layered sage and linen placemat set.",
+   "active": 1
+  },
+  {
+   "id": 4,
+   "name": "Embroidered Charger Mat",
+   "cat": "placemats",
+   "price": 95,
+   "stock": 18,
+   "img": "images/placemat-3.jpg",
+   "desc": "Large embroidered charger mat for statement tables.",
+   "active": 1
+  },
+  {
+   "id": 5,
+   "name": "Leaf Coaster Set of 4",
+   "cat": "coasters",
+   "price": 70,
+   "stock": 30,
+   "img": "images/coasters.jpg",
+   "desc": "Four round embroidered coasters.",
+   "active": 1
+  },
+  {
+   "id": 6,
+   "name": "Tassel Napkin Set",
+   "cat": "napkins",
+   "price": 120,
+   "stock": 10,
+   "img": "images/custom.jpg",
+   "desc": "Napkin set finished with a hand-twisted tassel.",
+   "active": 1
+  },
+  {
+   "id": 7,
+   "name": "Whipstitch Linen Napkin",
+   "cat": "napkins",
+   "price": 55,
+   "stock": 40,
+   "img": "images/products/whipstitch-napkin.jpg",
+   "desc": "Natural linen napkin with a sage whipstitch edge and leaf embroidery.",
+   "active": 1
+  },
+  {
+   "id": 8,
+   "name": "Napkin Ring & Tassel Set",
+   "cat": "napkins",
+   "price": 65,
+   "stock": 25,
+   "img": "images/products/napkin-ring-tassel.jpg",
+   "desc": "Embroidered napkin ring finished with a hand-twisted sage tassel.",
+   "active": 1
+  },
+  {
+   "id": 9,
+   "name": "Scalloped Natural Placemat",
+   "cat": "placemats",
+   "price": 90,
+   "stock": 20,
+   "img": "images/products/scalloped-natural.jpg",
+   "desc": "Natural linen scalloped placemat with olive-branch embroidery.",
+   "active": 1
+  },
+  {
+   "id": 10,
+   "name": "Layered Table Setting",
+   "cat": "placemats",
+   "price": 210,
+   "stock": 8,
+   "img": "images/products/table-set.jpg",
+   "desc": "Placemat, napkin and ring set for a complete place setting.",
+   "active": 1
+  },
+  {
+   "id": 11,
+   "name": "Leaf Coaster Trio",
+   "cat": "coasters",
+   "price": 55,
+   "stock": 30,
+   "img": "images/products/coaster-trio.jpg",
+   "desc": "Three round embroidered coasters with a stitched edge.",
+   "active": 1
+  },
+  {
+   "id": 12,
+   "name": "Oak Serving Tray",
+   "cat": "coasters",
+   "price": 140,
+   "stock": 15,
+   "img": "images/products/oak-tray.jpg",
+   "desc": "Natural oak serving tray, ideal with our coasters and linens.",
+   "active": 1
+  },
+  {
+   "id": 13,
+   "name": "Made-to-Order Napkin Set",
+   "cat": "custom",
+   "price": 150,
+   "stock": 50,
+   "img": "images/products/ring-set.jpg",
+   "desc": "Choose your colours and embroidery – a bespoke napkin and ring set.",
+   "active": 1
+  },
+  {
+   "id": 14,
+   "name": "Custom Table Collection",
+   "cat": "custom",
+   "price": 320,
+   "stock": 48,
+   "img": "images/products/table-set.jpg",
+   "desc": "A bespoke table collection for events, hotels and gifting. Contact us for details.",
+   "active": 1
+  }
+ ],
+ "settings": {
+  "company": {
+   "name": "Lofan Development & Trading",
+   "crNumber": "",
+   "address": "Doha, State of Qatar",
+   "phone": "+974 6640 4222",
+   "email": "info@lofan.qa",
+   "whatsapp": "97466404222"
+  },
+  "shipping": {
+   "fee": 10,
+   "freeFrom": 1000
+  },
+  "google": {
+   "clientId": ""
+  },
+  "shop": {
+   "autoDeleteSoldOut": true
+  },
+  "applepay": {
+   "enabled": false,
+   "merchantId": "",
+   "displayName": "Lofan",
+   "domain": "",
+   "sandbox": true,
+   "publicKey": "",
+   "secretKey": "",
+   "domainFile": ""
+  },
+  "payments": {
+   "iban": {
+    "enabled": true,
+    "bankName": "",
+    "accountName": "Lofan Development & Trading",
+    "accountNumber": "",
+    "iban": "",
+    "swift": "",
+    "branch": "Doha, Qatar"
+   },
+   "fawran": {
+    "enabled": true,
+    "alias": "66404222",
+    "accountName": "Lofan Development & Trading",
+    "bankName": ""
+   },
+   "ooredoo": {
+    "enabled": true,
+    "number": "66404222",
+    "accountName": "Lofan Development & Trading"
+   }
+  }
+ }
+}

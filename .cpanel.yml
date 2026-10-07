@@ -1,0 +1,17 @@
+---
+# cPanel "Git Version Control" reads this file when you press "Deploy HEAD Commit".
+# It copies the website from the repository into public_html.
+# It NEVER touches: private/config.php, your database, private/receipts, orders, or product photos added in the admin page.
+# (If lofan.qa is not the main domain of this cPanel account, change /home/lofanqa/public_html below to that domain's folder.)
+deployment:
+  tasks:
+    - /bin/mkdir -p /home/lofanqa/public_html/api /home/lofanqa/public_html/private /home/lofanqa/public_html/images/products
+    - /bin/cp -f index.html account.html payment.html admin.html /home/lofanqa/public_html/
+    - /bin/cp -R -f css js videos /home/lofanqa/public_html/
+    - /bin/cp -R -f images/. /home/lofanqa/public_html/images/
+    - /bin/rm -f /home/lofanqa/public_html/images/reference-design.jpg
+    - /bin/cp -f hosting/images-products.htaccess /home/lofanqa/public_html/images/products/.htaccess
+    - /bin/cp -f hosting/.htaccess hosting/.user.ini hosting/robots.txt /home/lofanqa/public_html/
+    - /bin/cp -f hosting/api/index.php /home/lofanqa/public_html/api/
+    - /bin/cp -f hosting/private/lib.php hosting/private/routes.php hosting/private/.htaccess /home/lofanqa/public_html/private/
+    - if [ ! -f /home/lofanqa/public_html/private/installed.lock ]; then /bin/cp -f hosting/install.php /home/lofanqa/public_html/ && /bin/cp -f hosting/private/seed.json /home/lofanqa/public_html/private/; fi

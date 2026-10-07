@@ -78,6 +78,42 @@ STEP 7  Share it
   IMPORTANT: do NOT delete the folder  private  on the server and do NOT re-run install.php.
 
 
+================= PART 3 – EASY EDITING: VS Code -> GitHub -> cPanel (recommended) =================
+
+  After the first publish (Part 1) you never need to make a zip again.
+  Daily routine:
+     1. Edit files in VS Code (text, images in images/, video in videos/, colours in css/, ...).
+     2. Double-click  Publish-To-GitHub.bat  (type a short note).     [or VS Code: Source Control > Commit > Sync]
+     3. cPanel > Git Version Control > Manage (next to "lofan") > "Update from Remote" > "Deploy HEAD Commit".
+  Your edits are live on lofan.qa within seconds. Products/prices/stock are still edited in Admin (no Git needed).
+
+  ONE-TIME SETUP
+  A) GitHub (you do this yourself - GitHub needs you to sign in):
+       1. github.com > sign in / create the account with your email.  Turn on 2-step verification (Settings > Password and authentication).
+       2. New repository: name  lofan   > choose Public (simplest) or Private > do NOT add README / .gitignore > Create.
+       3. In VS Code open the Terminal (Ctrl+`) and run (replace YOUR-USERNAME):
+              git remote add origin https://github.com/YOUR-USERNAME/lofan.git
+              git push -u origin main
+          A browser window opens: sign in to GitHub and press "Authorize". (Windows stores the sign-in safely; you will not
+          type a password into VS Code.)
+  B) cPanel (after the first push):
+       1. cPanel > "Git Version Control" > Create.
+       2. Clone URL:  https://github.com/YOUR-USERNAME/lofan.git   (Public repository: nothing else needed)
+          Repository path: lofan      > Create.
+       3. Manage > "Deploy HEAD Commit". (The file .cpanel.yml in the project tells cPanel what to copy into public_html.)
+       4. Open  https://lofan.qa/install.php  and finish the installer (Part 1, step 4) if you have not installed yet.
+     Private repository instead of public:  cPanel > "SSH Access" > Manage SSH Keys > Generate a New Key (no passphrase) >
+       View/Download the PUBLIC key > GitHub repo > Settings > Deploy keys > Add deploy key (read-only is enough).
+       Then use the clone URL  git@github.com:YOUR-USERNAME/lofan.git  and "Authorize" the key in cPanel.
+  Notes
+     - "Deploy HEAD Commit" only works when the server copy of the repository has no uncommitted changes: do not edit website
+       files directly on the server any more - always edit on your PC, then Publish.
+     - If the domain is not the main domain of this cPanel account, change the folder name /home/lofanqa/public_html in
+       .cpanel.yml to that domain's folder.
+     - After you change the shop in Admin and want those items in the repository too, run  python build_hosting_package.py --seed-only
+       (only matters for a brand-new install; the live shop keeps its own database).
+
+
 ================= TROUBLESHOOTING =================
 
   "Self-test: the API did not answer" / shop empty / admin page says cannot reach server

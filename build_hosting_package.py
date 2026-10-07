@@ -82,7 +82,7 @@ def stage():
         copy_tree(os.path.join(ROOT, f), os.path.join(STAGE, f))
     # server files for cPanel (everything in /hosting except the local-preview helpers)
     for name in os.listdir(HOSTING):
-        if name == 'dev':
+        if name in ('dev', 'images-products.htaccess'):
             continue
         src = os.path.join(HOSTING, name)
         if os.path.isdir(src):
@@ -90,8 +90,7 @@ def stage():
         else:
             shutil.copy2(src, STAGE)
     os.makedirs(os.path.join(STAGE, 'images', 'products'), exist_ok=True)
-    with open(os.path.join(STAGE, 'images', 'products', '.htaccess'), 'w', encoding='utf-8', newline='\n') as f:
-        f.write('# product photos are plain files: never run scripts from here\n<FilesMatch "\\.(php|phtml|phar|pl|py|cgi)$">\n  Require all denied\n</FilesMatch>\n')
+    shutil.copy2(os.path.join(HOSTING, 'images-products.htaccess'), os.path.join(STAGE, 'images', 'products', '.htaccess'))
     for d in ('receipts', 'applepay', 'throttle'):          # empty folders the server writes to
         os.makedirs(os.path.join(STAGE, 'private', d), exist_ok=True)
         open(os.path.join(STAGE, 'private', d, 'index.html'), 'w').close()
@@ -134,6 +133,11 @@ def preview():
 
 
 if __name__ == '__main__':
+    if '--seed-only' in sys.argv:      # refresh hosting/private/seed.json (used by the GitHub -> cPanel deployment)
+        with open(os.path.join(HOSTING, 'private', 'seed.json'), 'w', encoding='utf-8') as f:
+            json.dump(export_seed(), f, ensure_ascii=False, indent=1)
+        print('hosting/private/seed.json updated from your current local shop.')
+        sys.exit(0)
     os.makedirs(DIST, exist_ok=True)
     print('Building the cPanel package ...')
     stage()
