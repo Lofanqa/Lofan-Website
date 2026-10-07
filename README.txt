@@ -156,7 +156,15 @@ WHERE DATA LIVES
   images/products/     photos of items you add
   Do not share the data folder. The server never serves it to visitors.
 
-SELLING TO REAL CUSTOMERS (putting the website online)
+PUBLISH ON lofan.qa (cPanel hosting)  <- the easy way
+  1. Double-click Build-Hosting-Zip.bat  -> creates dist\lofan-cpanel.zip (website + PHP/MySQL server).
+  2. Follow hosting\README-HOSTING.txt (also inside the zip): create a MySQL database, upload + extract the zip in
+     public_html, open /install.php, run AutoSSL for https, create the admin account.
+  3. To preview the exact hosting version on this PC first:  python build_hosting_package.py --preview  (http://localhost:8020)
+  4. To also copy today's customers/orders from this PC to the hosting:  python build_hosting_package.py --full
+  Your local Python server (Start-Lofan.bat) is only for working on the site on this PC; the live site uses PHP + MySQL.
+
+SELLING TO REAL CUSTOMERS (alternative: your own server / VPS)
   Right now the site only runs on YOUR computer (localhost). To sell to customers it must run
   on an always-on server with a web address:
   1. Rent a small cloud server (VPS) - e.g. DigitalOcean, Hetzner, Vultr, AWS Lightsail
