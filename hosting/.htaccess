@@ -1,0 +1,72 @@
+# =====================================================================
+# LOFAN – Apache / LiteSpeed rules for cPanel hosting
+# =====================================================================
+Options -Indexes
+DirectoryIndex index.html index.php
+AddDefaultCharset UTF-8
+
+<IfModule mod_mime.c>
+  AddType video/mp4 .mp4
+  AddType image/webp .webp
+  AddType application/javascript .js
+</IfModule>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # 1) Force https:// – switched on by the installer (it creates private/force_https.flag) once SSL works.
+  #    The certificate-validation folders are excluded so AutoSSL can renew the certificate.
+  RewriteCond %{DOCUMENT_ROOT}/private/force_https.flag -f
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https
+  RewriteCond %{REQUEST_URI} !^/\.well-known/(acme-challenge|pki-validation)/
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+  # 2) Apple Pay domain-verification file is served by PHP (text pasted in the admin page)
+  RewriteRule ^\.well-known/apple-developer-merchantid-domain-association\.txt$ api/index.php?__wk=apple [L,QSA]
+
+  # 3) Every /api/... URL goes to the PHP front controller
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteRule ^api/(.*)$ api/index.php [L,QSA]
+</IfModule>
+
+# Never let visitors download server code, databases or logs
+<IfModule mod_authz_core.c>
+  <FilesMatch "\.(py|bat|ps1|db|sqlite|sql|log|md|lock|flag|ini)$">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+  <FilesMatch "\.(py|bat|ps1|db|sqlite|sql|log|md|lock|flag|ini)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>
+
+# Speed: compression + sensible caching (HTML always fresh, so your edits show at once)
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/css application/javascript text/javascript application/json image/svg+xml
+</IfModule>
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/html "access plus 0 seconds"
+  ExpiresByType text/css "access plus 1 hour"
+  ExpiresByType application/javascript "access plus 1 hour"
+  ExpiresByType text/javascript "access plus 1 hour"
+  ExpiresByType image/jpeg "access plus 7 days"
+  ExpiresByType image/png "access plus 7 days"
+  ExpiresByType image/webp "access plus 7 days"
+  ExpiresByType image/svg+xml "access plus 7 days"
+  ExpiresByType video/mp4 "access plus 7 days"
+</IfModule>
+
+# Basic security headers
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Permissions-Policy "geolocation=(self), camera=(), microphone=()"
+  <FilesMatch "\.html$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""
+Builds the ZIP you upload to cPanel  ->  dist/lofan-cpanel.zip
+
+    python build_hosting_package.py            # website + your current shop items (no customers / orders)
+    python build_hosting_package.py --full     # ALSO copies customers, orders, chats and enquiries from this PC
+    python build_hosting_package.py --preview  # builds, then runs the PHP version on http://localhost:8020 for a final check
+
+The pages (index.html, js/, css/, images/, videos/) are taken from this folder, so every edit you make here
+is included the next time you run it.  The server code for hosting lives in the "hosting" folder.
+"""
+import json, os, shutil, sqlite3, subprocess, sys, time, zipfile
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+HOSTING = os.path.join(ROOT, 'hosting')
+DIST = os.path.join(ROOT, 'dist')
+STAGE = os.path.join(DIST, 'lofan-site')
+ZIP = os.path.join(DIST, 'lofan-cpanel.zip')
+DB = os.path.join(ROOT, 'data', 'lofan.db')
+PHP = os.environ.get('PHP_EXE') or os.path.join(os.path.expanduser('~'), 'lofan-tools', 'php', 'php.exe')
+
+PAGES = ['index.html', 'account.html', 'payment.html', 'admin.html']
+FOLDERS = ['css', 'js', 'images', 'videos']
+SKIP_FILES = {'reference-design.jpg'}             # your design reference – not needed on the live site
+FULL = '--full' in sys.argv
+PREVIEW = '--preview' in sys.argv
+
+DEFAULT_SEED = {
+    'categories': [{'key': 'napkins', 'label': 'Napkins', 'sort': 0}, {'key': 'placemats', 'label': 'Placemats', 'sort': 1},
+                   {'key': 'coasters', 'label': 'Trays & Coasters', 'sort': 2}, {'key': 'custom', 'label': 'Custom Pieces', 'sort': 3}],
+    'products': [],
+}
+
+
+def export_seed():
+    """Shop content from the local database. Secrets (Apple Pay keys, Google id) are removed."""
+    if not os.path.isfile(DB):
+        print('  (no local database found – using the default shop items)')
+        return DEFAULT_SEED
+    c = sqlite3.connect('file:' + DB.replace('\\', '/') + '?mode=ro', uri=True)
+    c.row_factory = sqlite3.Row
+    rows = lambda sql: [dict(r) for r in c.execute(sql)]
+    seed = {'categories': rows('SELECT key,label,sort FROM categories ORDER BY sort'),
+            'products': rows('SELECT id,name,cat,price,stock,img,desc,active FROM products ORDER BY id')}
+    s = c.execute("SELECT value FROM settings WHERE key='settings'").fetchone()
+    if s:
+        st = json.loads(s[0])
+        ap = st.get('applepay', {})
+        st['applepay'] = {**ap, 'enabled': False, 'secretKey': '', 'publicKey': '', 'domainFile': '', 'merchantId': '', 'domain': ''}
+        st['google'] = {'clientId': ''}
+        seed['settings'] = st
+    if FULL:
+        for t in ('users', 'orders', 'order_events', 'messages', 'notifications', 'enquiries'):
+            seed[t] = rows(f'SELECT * FROM {t}')
+        print('  --full: including', {t: len(seed[t]) for t in ('users', 'orders', 'messages', 'enquiries')})
+        print('  NOTE: receipts (uploaded payment proofs) are not copied; copy data/receipts/* to private/receipts/ by hand if you need them.')
+    c.close()
+    missing = [p['img'] for p in seed['products'] if not os.path.isfile(os.path.join(ROOT, p['img']))]
+    if missing:
+        print('  WARNING: these product photos are missing from the images folder:', missing)
+    return seed
+
+
+def copy_tree(src, dst):
+    for base, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d not in ('__pycache__', '.git')]
+        rel = os.path.relpath(base, src)
+        os.makedirs(os.path.join(dst, rel), exist_ok=True)
+        for f in files:
+            if f in SKIP_FILES or f.startswith('_tmp'):
+                continue
+            shutil.copy2(os.path.join(base, f), os.path.join(dst, rel, f))
+
+
+def stage():
+    if os.path.isdir(STAGE):
+        shutil.rmtree(STAGE)
+    os.makedirs(STAGE)
+    for p in PAGES:
+        shutil.copy2(os.path.join(ROOT, p), STAGE)
+    for f in FOLDERS:
+        copy_tree(os.path.join(ROOT, f), os.path.join(STAGE, f))
+    # server files for cPanel (everything in /hosting except the local-preview helpers)
+    for name in os.listdir(HOSTING):
+        if name == 'dev':
+            continue
+        src = os.path.join(HOSTING, name)
+        if os.path.isdir(src):
+            copy_tree(src, os.path.join(STAGE, name))
+        else:
+            shutil.copy2(src, STAGE)
+    os.makedirs(os.path.join(STAGE, 'images', 'products'), exist_ok=True)
+    with open(os.path.join(STAGE, 'images', 'products', '.htaccess'), 'w', encoding='utf-8', newline='\n') as f:
+        f.write('# product photos are plain files: never run scripts from here\n<FilesMatch "\\.(php|phtml|phar|pl|py|cgi)$">\n  Require all denied\n</FilesMatch>\n')
+    for d in ('receipts', 'applepay', 'throttle'):          # empty folders the server writes to
+        os.makedirs(os.path.join(STAGE, 'private', d), exist_ok=True)
+        open(os.path.join(STAGE, 'private', d, 'index.html'), 'w').close()
+    with open(os.path.join(STAGE, 'private', 'seed.json'), 'w', encoding='utf-8') as f:
+        json.dump(export_seed(), f, ensure_ascii=False, indent=1)
+    for stray in ('config.php', 'installed.lock', 'force_https.flag', 'error.log'):
+        p = os.path.join(STAGE, 'private', stray)
+        if os.path.exists(p):
+            os.remove(p)
+
+
+def make_zip():
+    if os.path.exists(ZIP):
+        os.remove(ZIP)
+    n = 0
+    with zipfile.ZipFile(ZIP, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for base, dirs, files in os.walk(STAGE):
+            for f in sorted(files):
+                full = os.path.join(base, f)
+                z.write(full, os.path.relpath(full, STAGE).replace('\\', '/'))
+                n += 1
+    return n
+
+
+def preview():
+    pv = os.path.join(DIST, 'lofan-preview')
+    if os.path.isdir(pv):
+        shutil.rmtree(pv)
+    shutil.copytree(STAGE, pv)
+    shutil.copy2(os.path.join(HOSTING, 'dev', 'router.php'), os.path.join(pv, 'router.php'))
+    data = os.path.join(DIST, 'preview-data'); os.makedirs(data, exist_ok=True)
+    dbfile = os.path.join(data, 'preview.sqlite')
+    if os.path.exists(dbfile):
+        os.remove(dbfile)
+    with open(os.path.join(pv, 'private', 'config.php'), 'w', encoding='utf-8') as f:
+        f.write("<?php\nreturn " + "['driver'=>'sqlite','path'=>'" + dbfile.replace('\\', '/') + "'];\n")
+    subprocess.run([PHP, '-c', os.path.join(os.path.dirname(PHP), 'php.ini'), os.path.join(HOSTING, 'dev', 'init_sqlite.php'), pv], check=True)
+    print('\n  Preview of the hosting (PHP) version:  http://localhost:8020      (Ctrl+C to stop)\n')
+    subprocess.run([PHP, '-c', os.path.join(os.path.dirname(PHP), 'php.ini'), '-S', '127.0.0.1:8020', '-t', pv, os.path.join(pv, 'router.php')])
+
+
+if __name__ == '__main__':
+    os.makedirs(DIST, exist_ok=True)
+    print('Building the cPanel package ...')
+    stage()
+    n = make_zip()
+    mb = os.path.getsize(ZIP) / 1024 / 1024
+    print(f'\n  DONE  ->  {ZIP}\n  {n} files, {mb:.2f} MB\n  Upload it in cPanel > File Manager > public_html > Upload, then Extract. See hosting/README-HOSTING.txt.\n')
+    if PREVIEW:
+        preview()

@@ -1,0 +1,626 @@
+<?php
+/* LOFAN – API routes. One function; returns [http_code, data] (or ['raw', bytes, content_type, filename]). */
+defined('LOFAN') or exit;
+
+function handle_api($method, $route, $body)
+{
+    $m = [];
+    $R = function ($mth, $pat) use ($method, $route, &$m) {
+        return $method === $mth && preg_match('#^' . $pat . '$#D', $route, $m) === 1;
+    };
+    $json = function () use ($body) {   // the request JSON as an array
+        if ($body === '' || $body === null) return [];
+        $ct = $_SERVER['CONTENT_TYPE'] ?? ($_SERVER['HTTP_CONTENT_TYPE'] ?? '');
+        if (stripos($ct, 'application/json') === false) throw new ApiError(415, 'JSON required');
+        $d = json_decode($body, true);
+        if (!is_array($d)) throw new ApiError(400, 'Invalid JSON');
+        return $d;
+    };
+    $objmap = function ($pairs) { $o = new stdClass; foreach ($pairs as $k => $v) $o->{(string)$k} = $v; return $o; };
+    $msg_out = function ($rows) {
+        $out = [];
+        foreach ($rows as $r) {
+            $loc = null;
+            if (preg_match('/^\[loc:(-?\d+\.\d+),(-?\d+\.\d+)\]$/D', (string)$r['body'], $mm)) $loc = ['lat' => (float)$mm[1], 'lng' => (float)$mm[2]];
+            $out[] = ['id' => (int)$r['id'], 'sender' => $r['sender'], 'body' => $loc ? '' : $r['body'], 'created' => (int)$r['created'], 'loc' => $loc];
+        }
+        return $out;
+    };
+    $one_msg = function ($id) use ($msg_out) { return $msg_out([q_one('SELECT * FROM messages WHERE id=?', [(int)$id])])[0]; };
+    $cats = function () use ($objmap) {
+        $c = [];
+        foreach (q_all('SELECT `key`,label FROM categories ORDER BY sort, `key`') as $r) $c[$r['key']] = $r['label'];
+        return $objmap($c);
+    };
+
+    /* ================= public ================= */
+    if ($R('GET', 'me')) {
+        $u = current_user();
+        return [200, ['user' => $u ? public_user($u) : null]];
+    }
+
+    if ($R('POST', 'register')) {
+        $d = $json();
+        $name = clean($d['name'] ?? '', 80); $email = lower(clean($d['email'] ?? '', 120)); $phone = norm_phone($d['phone'] ?? '');
+        $pw = str_val($d['password'] ?? '');
+        if (slen($name) < 2) throw new ApiError(400, 'Please enter your full name.', 'name');
+        if (!valid_phone($phone)) throw new ApiError(400, 'Please enter a valid mobile number.', 'phone');
+        if (!valid_email($email)) throw new ApiError(400, 'Please enter a valid email address.', 'email');
+        if (strlen($pw) < 6) throw new ApiError(400, 'Password must be at least 6 characters.', 'password');
+        $em = q_one('SELECT google_sub, `hash` FROM users WHERE email=?', [$email]);
+        $ph = q_val('SELECT 1 FROM users WHERE phone=?', [$phone]);
+        if ($em && $ph) throw new ApiError(409, 'This email and mobile number are already registered to an existing account. Please sign in instead.', 'email');
+        if ($em) {
+            $extra = (!empty($em['google_sub']) && empty($em['hash'])) ? ' It was created with Google – choose "Continue with Google".' : '';
+            throw new ApiError(409, 'This email is already registered to an existing account. Please sign in, or use a different email.' . $extra, 'email');
+        }
+        if ($ph) throw new ApiError(409, 'This mobile number is already registered to an existing account. Please sign in, or use a different number.', 'phone');
+        try {
+            $id = q_insert("INSERT INTO users(name,email,phone,salt,`hash`,role,created) VALUES(?,?,?,?,?,?,?)", [$name, $email, $phone, '', hash_new_pw($pw), 'customer', now()]);
+        } catch (PDOException $e) {
+            throw new ApiError(409, 'This email or mobile number is already registered to an existing account. Please sign in instead.', 'email');
+        }
+        start_session($id);
+        return [200, ['user' => public_user(user_by_id($id))]];
+    }
+
+    if ($R('POST', 'login')) {
+        $d = $json();
+        $ident = lower(clean($d['id'] ?? '', 120)); $pw = str_val($d['password'] ?? '');
+        throttle(client_ip() . $ident);
+        $u = q_one('SELECT * FROM users WHERE email=? OR phone=?', [$ident, valid_phone($ident) ? norm_phone($ident) : '-']);
+        $ok = false;
+        if ($u && !empty($u['hash'])) $ok = check_pw($pw, $u);
+        elseif ($u && !empty($u['google_sub'])) throw new ApiError(401, 'This account uses Google. Please choose "Continue with Google".');
+        if (!$ok) throw new ApiError(401, 'Incorrect email/phone or password.');
+        start_session($u['id']);
+        return [200, ['user' => public_user($u)]];
+    }
+
+    if ($R('GET', 'check')) {   // live "is this email / mobile already registered?" hint on the sign-up form
+        throttle('chk' . client_ip(), 80, 600);
+        $em = lower(clean(qs('email'), 120)); $ph = norm_phone(qs('phone'));
+        $out = [];
+        if ($em !== '' && valid_email($em)) $out['emailTaken'] = (bool)q_val('SELECT 1 FROM users WHERE email=?', [$em]);
+        if ($ph !== '' && valid_phone($ph)) $out['phoneTaken'] = (bool)q_val('SELECT 1 FROM users WHERE phone=?', [$ph]);
+        return [200, $out ?: new stdClass];
+    }
+
+    if ($R('GET', 'config')) {
+        $co = get_settings()['company'];
+        return [200, ['googleClientId' => google_client_id(), 'whatsapp' => $co['whatsapp'], 'phone' => $co['phone']]];
+    }
+
+    if ($R('POST', 'google')) {
+        $d = $json();
+        $cid = google_client_id();
+        if (!$cid) throw new ApiError(503, 'Google sign-in is not set up yet.');
+        throttle('g' . client_ip(), 20);
+        $info = verify_google($d['credential'] ?? '', $cid);
+        $email = lower($info['email']); $sub = $info['sub'];
+        $u = q_one('SELECT * FROM users WHERE google_sub=? OR email=?', [$sub, $email]);
+        $created = false;
+        if ($u) {
+            if ($u['role'] === 'admin') throw new ApiError(403, 'Admin accounts must sign in with email and password.');
+            if (empty($u['google_sub'])) q_exec('UPDATE users SET google_sub=? WHERE id=?', [$sub, (int)$u['id']]);
+            $uid = (int)$u['id'];
+        } else {
+            $name = clean(($info['name'] ?? '') ?: explode('@', $email)[0], 80);
+            $uid = q_insert('INSERT INTO users(name,email,phone,salt,`hash`,role,created,google_sub) VALUES(?,?,NULL,NULL,NULL,?,?,?)', [$name, $email, 'customer', now(), $sub]);
+            $created = true;
+        }
+        start_session($uid);
+        return [200, ['user' => public_user(user_by_id($uid)), 'created' => $created]];
+    }
+
+    if ($R('POST', 'logout')) {
+        $tok = $_COOKIE['lofan_session'] ?? '';
+        if ($tok !== '' && preg_match('/^[A-Za-z0-9_-]+$/D', $tok)) q_exec('DELETE FROM sessions WHERE token=?', [$tok]);
+        set_session_cookie('', time() - 3600);
+        return [200, ['ok' => true]];
+    }
+
+    if ($R('GET', 'products')) {
+        $s = get_settings();
+        $prods = array_map(function ($p) { foreach (['id', 'price', 'stock'] as $k) $p[$k] = (int)$p[$k]; return $p; },
+            q_all('SELECT id,name,cat,price,stock,img,`desc` FROM products WHERE active=1 ORDER BY id'));
+        return [200, ['categories' => $cats(), 'products' => $prods, 'shipping' => $s['shipping'], 'currency' => CURRENCY, 'company' => $s['company']]];
+    }
+
+    if ($R('POST', 'enquiries')) {
+        $d = $json();
+        $name = clean($d['name'] ?? '', 80); $email = clean($d['email'] ?? '', 120); $phone = clean($d['phone'] ?? '', 30); $msg = clean($d['message'] ?? '', 2000);
+        if ($name === '' || $msg === '' || !valid_email($email) || $phone === '') throw new ApiError(400, 'Please complete the required fields.');
+        $id = q_insert('INSERT INTO enquiries(name,company,email,phone,type,qty,message,created) VALUES(?,?,?,?,?,?,?,?)',
+            [$name, clean($d['company'] ?? '', 80), $email, $phone, clean($d['type'] ?? '', 60), clean($d['qty'] ?? '', 60), $msg, now()]);
+        notify('enquiry', "New enquiry from $name", clean($d['type'] ?? '', 60) . ' · ' . $phone, (string)$id);
+        return [200, ['ok' => true]];
+    }
+
+    if ($R('GET', 'admin/status')) return [200, ['hasAdmin' => (bool)q_val("SELECT 1 FROM users WHERE role='admin'")]];
+
+    if ($R('POST', 'admin/setup')) {
+        if (q_val("SELECT 1 FROM users WHERE role='admin'")) throw new ApiError(403, 'An admin account already exists.');
+        $d = $json();
+        $name = clean($d['name'] ?? '', 80); $email = lower(clean($d['email'] ?? '', 120)); $pw = str_val($d['password'] ?? '');
+        if (strlen($name) < 2 || !valid_email($email)) throw new ApiError(400, 'Enter a name and a valid email.');
+        if (strlen($pw) < 8) throw new ApiError(400, 'Admin password must be at least 8 characters.');
+        if (q_val('SELECT 1 FROM users WHERE email=?', [$email])) throw new ApiError(409, 'That email is already used by a customer account.');
+        $id = q_insert("INSERT INTO users(name,email,phone,salt,`hash`,role,created) VALUES(?,?,?,?,?,?,?)", [$name, $email, 'admin-' . bin2hex(random_bytes(4)), '', hash_new_pw($pw), 'admin', now()]);
+        start_session($id);
+        return [200, ['user' => public_user(user_by_id($id))]];
+    }
+
+    /* ================= customer ================= */
+    if ($R('PUT', 'me')) {
+        $u = need_user(); $d = $json();
+        $name = clean($d['name'] ?? '', 80); $email = lower(clean($d['email'] ?? '', 120)); $phone = norm_phone($d['phone'] ?? '');
+        if (slen($name) < 2) throw new ApiError(400, 'Please enter your name.');
+        if ($u['role'] === 'admin') $phone = $u['phone'];
+        elseif (!valid_phone($phone)) throw new ApiError(400, 'Please enter a valid phone number.');
+        if (!valid_email($email)) throw new ApiError(400, 'Please enter a valid email address.');
+        if (q_val('SELECT 1 FROM users WHERE email=? AND id<>?', [$email, (int)$u['id']])) throw new ApiError(409, 'This email is already registered to another account. Please use a different email.', 'email');
+        if (q_val('SELECT 1 FROM users WHERE phone=? AND id<>?', [$phone, (int)$u['id']])) throw new ApiError(409, 'This mobile number is already registered to another account. Please use a different number.', 'phone');
+        q_exec('UPDATE users SET name=?,email=?,phone=?,address=? WHERE id=?', [$name, $email, $phone, clean($d['address'] ?? '', 300), (int)$u['id']]);
+        return [200, ['user' => public_user(user_by_id($u['id']))]];
+    }
+
+    if ($R('PUT', 'me/location')) {   // customer shares / updates their current location (their own explicit action)
+        $u = need_user(); $d = $json();
+        $loc = valid_loc($d['lat'] ?? null, $d['lng'] ?? null);
+        if (!$loc) throw new ApiError(400, 'That location could not be read. Please try again.');
+        save_user_loc($u['id'], $loc);
+        return [200, ['user' => public_user(user_by_id($u['id']))]];
+    }
+    if ($R('DELETE', 'me/location')) {
+        $u = need_user();
+        q_exec('UPDATE users SET lat=NULL,lng=NULL,loc_at=NULL WHERE id=?', [(int)$u['id']]);
+        return [200, ['user' => public_user(user_by_id($u['id']))]];
+    }
+
+    if ($R('POST', 'me/password')) {
+        $u = need_user(); $d = $json();
+        if (!empty($u['hash']) && !check_pw(str_val($d['current'] ?? ''), $u)) throw new ApiError(400, 'Current password is incorrect.');   // Google-only accounts have no password yet
+        $new = str_val($d['new'] ?? '');
+        if (strlen($new) < ($u['role'] === 'admin' ? 8 : 6)) throw new ApiError(400, 'New password is too short.');
+        q_exec("UPDATE users SET salt='', `hash`=? WHERE id=?", [hash_new_pw($new), (int)$u['id']]);
+        return [200, ['ok' => true]];
+    }
+
+    if ($R('GET', 'payment-info')) { need_user(); return [200, payment_info()]; }
+
+    if ($R('POST', 'orders')) {
+        $u = need_user(); $d = $json();
+        $dl = is_array($d['delivery'] ?? null) ? $d['delivery'] : [];
+        $delivery = ['name' => clean($dl['name'] ?? '', 80), 'phone' => norm_phone($dl['phone'] ?? ''), 'email' => clean($dl['email'] ?? '', 120),
+            'address' => clean($dl['address'] ?? '', 300), 'notes' => clean($dl['notes'] ?? '', 300)];
+        $loc = valid_loc($dl['lat'] ?? null, $dl['lng'] ?? null);   // optional: the customer chose "Share my current location"
+        if ($loc) {
+            $delivery['lat'] = $loc[0]; $delivery['lng'] = $loc[1];
+            $delivery['acc'] = max(0, min(100000, (int)(is_numeric($dl['acc'] ?? null) ? $dl['acc'] : 0)));
+            save_user_loc($u['id'], $loc);
+        }
+        if (slen($delivery['name']) < 2 || !valid_phone($delivery['phone']) || !valid_email($delivery['email']) || strlen($delivery['address']) < 5)
+            throw new ApiError(400, 'Please complete your delivery details (name, phone, email, address).');
+        $want = [];
+        foreach (is_array($d['items'] ?? null) ? $d['items'] : [] as $it) {
+            if (!is_array($it) || !isset($it['id'], $it['qty']) || !is_numeric($it['id']) || !is_numeric($it['qty'])) throw new ApiError(400, 'Invalid cart');
+            $pid = (int)$it['id'];
+            $want[$pid] = ($want[$pid] ?? 0) + max(0, (int)$it['qty']);
+        }
+        $lines = []; $subtotal = 0;
+        foreach ($want as $pid => $qty) {
+            $p = q_one('SELECT * FROM products WHERE id=? AND active=1', [$pid]);
+            if (!$p || $qty < 1) throw new ApiError(400, 'An item in your cart is no longer available.');
+            if ((int)$p['stock'] < $qty) throw new ApiError(409, 'Sorry, only ' . (int)$p['stock'] . ' of "' . $p['name'] . '" left in stock.');
+            $lines[] = ['id' => $pid, 'name' => $p['name'], 'price' => (int)$p['price'], 'qty' => $qty];
+            $subtotal += (int)$p['price'] * $qty;
+        }
+        if (!$lines) throw new ApiError(400, 'Your cart is empty.');
+        $sh = get_settings()['shipping'];
+        $shipping = $subtotal >= (int)$sh['freeFrom'] ? 0 : (int)$sh['fee'];
+        foreach ($lines as $ln) {
+            if (q_exec('UPDATE products SET stock=stock-? WHERE id=? AND stock>=?', [$ln['qty'], $ln['id'], $ln['qty']]) < 1)
+                throw new ApiError(409, 'Sorry, "' . $ln['name'] . '" has just sold out. Please refresh and try again.');
+        }
+        $oid = new_order_id();
+        q_exec('INSERT INTO orders(id,user_id,created,items,subtotal,shipping,total,delivery,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            [$oid, (int)$u['id'], now(), json_encode($lines, JSON_UNESCAPED_UNICODE), $subtotal, $shipping, $subtotal + $shipping, json_encode($delivery, JSON_UNESCAPED_UNICODE), 'Awaiting payment']);
+        add_event($oid, 'Awaiting payment', 'Order placed');
+        q_exec("UPDATE users SET address=? WHERE id=? AND (address IS NULL OR address='')", [$delivery['address'], (int)$u['id']]);
+        $n = array_sum(array_column($lines, 'qty'));
+        notify('order', "New order $oid", $delivery['name'] . ' · ' . $n . ' item' . ($n != 1 ? 's' : '') . ' · ' . ($subtotal + $shipping) . ' ' . CURRENCY . ' · awaiting payment', $oid);
+        return [200, ['order' => order_out(order_by_id($oid))]];
+    }
+
+    if ($R('GET', 'orders')) {
+        $u = need_user();
+        return [200, ['orders' => array_map(function ($r) { return order_out($r); }, q_all('SELECT * FROM orders WHERE user_id=? ORDER BY created DESC', [(int)$u['id']]))]];
+    }
+
+    if ($R('GET', 'orders/(LF-[A-Z0-9]{6})')) {
+        $u = need_user();
+        $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$m[1], (int)$u['id']]);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        return [200, ['order' => order_out($r)]];
+    }
+
+    if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/payment')) {
+        $u = need_user(); $d = $json(); $oid = $m[1];
+        $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        if ($r['status'] !== 'Awaiting payment') throw new ApiError(409, 'Payment was already submitted for this order.');
+        $meth = null;
+        foreach (payment_info()['methods'] as $x) if ($x['id'] === clean($d['method'] ?? '', 20)) $meth = $x;
+        if (!$meth) throw new ApiError(400, 'Please choose a payment method.');
+        $txn = clean($d['txn'] ?? '', 60);
+        if (strlen($txn) < 4) throw new ApiError(400, 'Please enter the transaction / reference number from your payment receipt.');
+        $receipt = null;
+        $rc = $d['receipt'] ?? null;
+        if (is_array($rc) && !empty($rc['data'])) {
+            $receipt = save_data_url($rc['data'], receipts_dir(), $oid, ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'application/pdf' => 'pdf'], 1500000);
+        }
+        q_exec('UPDATE orders SET method=?,txn=?,receipt=?,status=? WHERE id=?', [$meth['label'], $txn, $receipt, 'Payment submitted', $oid]);
+        add_event($oid, 'Payment submitted', $meth['label'] . ' · ref ' . $txn);
+        $dn = (json_decode($r['delivery'], true) ?: [])['name'] ?? '';
+        notify('payment', "Payment submitted – $oid", $dn . ' paid ' . (int)$r['total'] . ' ' . CURRENCY . ' via ' . $meth['label'] . " (ref $txn). Please verify.", $oid);
+        return [200, ['order' => order_out(order_by_id($oid))]];
+    }
+
+    if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/cancel')) {
+        $u = need_user(); $oid = $m[1];
+        $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        if ($r['status'] !== 'Awaiting payment') throw new ApiError(409, 'Only unpaid orders can be cancelled here. Please contact us.');
+        restore_stock($r);
+        q_exec("UPDATE orders SET status='Cancelled' WHERE id=?", [$oid]);
+        sweep_soldout();
+        add_event($oid, 'Cancelled', 'Cancelled by customer');
+        notify('order', "Order $oid cancelled", 'Cancelled by the customer before payment.', $oid);
+        return [200, ['ok' => true]];
+    }
+
+    if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/applepay/(session|pay)')) {
+        $u = need_user(); $d = $json(); $oid = $m[1]; $step = $m[2];
+        $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        if ($r['status'] !== 'Awaiting payment') throw new ApiError(409, 'This order is no longer awaiting payment.');
+        $ap = get_settings()['applepay'];
+        if (empty($ap['enabled']) || applepay_missing($ap)) throw new ApiError(400, 'Apple Pay is not available right now.');
+        if ($step === 'session') return [200, apple_validate($ap, $d['validationURL'] ?? '', $_SERVER['HTTP_HOST'] ?? '')];
+        $token = $d['token'] ?? null;
+        if (!is_array($token)) throw new ApiError(400, 'Missing Apple Pay token.');
+        throttle('ap' . $u['id'], 10, 600);
+        $delivery = json_decode($r['delivery'], true) ?: [];
+        list($approved, $pid) = psp_charge($ap, $token, $r, $delivery['email'] ?? '', $delivery['name'] ?? '');
+        if (!$approved) throw new ApiError(402, 'Your payment was declined. Please try another card or payment method.');
+        q_exec('UPDATE orders SET method=?,txn=?,status=? WHERE id=?', ['Apple Pay', $pid, 'Payment confirmed', $oid]);
+        add_event($oid, 'Payment confirmed', "Apple Pay – paid online (ref $pid)");
+        notify('payment', "Apple Pay payment received – $oid", ($delivery['name'] ?? '') . ' paid ' . (int)$r['total'] . ' ' . CURRENCY . " by Apple Pay (ref $pid). Already confirmed.", $oid);
+        return [200, ['order' => order_out(order_by_id($oid))]];
+    }
+
+    /* ----- customer chat (website live chat with the admin) ----- */
+    if ($R('GET', 'chat')) {
+        $u = need_user();
+        $after = (int)qs('after', '0');
+        if (qs('open', '0') === '1') q_exec("UPDATE messages SET seen=1 WHERE user_id=? AND sender='admin'", [(int)$u['id']]);
+        return [200, ['messages' => $msg_out(q_all('SELECT * FROM messages WHERE user_id=? AND id>? ORDER BY id LIMIT 200', [(int)$u['id'], $after]))]];
+    }
+    if ($R('GET', 'chat/unread')) {
+        $u = need_user();
+        return [200, ['unread' => (int)q_val("SELECT COUNT(*) FROM messages WHERE user_id=? AND sender='admin' AND seen=0", [(int)$u['id']])]];
+    }
+    if ($R('POST', 'chat')) {
+        $u = need_user(); $d = $json();
+        if ($u['role'] === 'admin') throw new ApiError(403, 'Use the admin chat page.');
+        $text = clean($d['body'] ?? '', 1000); $loc = null;
+        if (!empty($d['location'])) {
+            $l = is_array($d['location']) ? $d['location'] : [];
+            $loc = valid_loc($l['lat'] ?? null, $l['lng'] ?? null);
+            if (!$loc) throw new ApiError(400, 'That location could not be read. Please try again.');
+            $text = '[loc:' . num6($loc[0]) . ',' . num6($loc[1]) . ']';
+            save_user_loc($u['id'], $loc);
+        }
+        if ($text === '') throw new ApiError(400, 'Type a message first.');
+        throttle('chat' . $u['id'], 40, 60);
+        $id = q_insert('INSERT INTO messages(user_id,sender,body,created) VALUES(?,?,?,?)', [(int)$u['id'], 'customer', $text, now()]);
+        notify('chat', 'Message from ' . $u['name'], $loc ? '📍 Shared their location' : slice($text, 140), (string)$u['id']);
+        return [200, ['message' => $one_msg($id)]];
+    }
+
+    /* ================= admin ================= */
+    if (strpos($route, 'admin/') === 0) need_admin();
+
+    if ($R('GET', 'admin/orders')) {
+        $st = qs('status');
+        $rows = q_all("SELECT * FROM orders WHERE (?='' OR status=?) ORDER BY created DESC", [$st, $st]);
+        return [200, ['orders' => array_map(function ($r) { return order_out($r, true); }, $rows), 'statuses' => STATUSES]];
+    }
+
+    if ($R('PUT', 'admin/orders/(LF-[A-Z0-9]{6})')) {
+        $d = $json(); $oid = $m[1];
+        $r = q_one('SELECT * FROM orders WHERE id=?', [$oid]);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        $new = $d['status'] ?? null;
+        if (!in_array($new, STATUSES, true)) throw new ApiError(400, 'Invalid status');
+        if ($r['status'] === 'Cancelled' && $new !== 'Cancelled') throw new ApiError(409, 'Cancelled orders cannot be reopened.');
+        if ($new === 'Cancelled' && $r['status'] !== 'Cancelled') restore_stock($r);
+        q_exec('UPDATE orders SET status=? WHERE id=?', [$new, $oid]);
+        sweep_soldout();
+        add_event($oid, $new, clean($d['note'] ?? '', 200));
+        return [200, ['order' => order_out(order_by_id($oid), true)]];
+    }
+
+    if ($R('GET', 'admin/receipt/(LF-[A-Z0-9]{6})')) {
+        $r = q_one('SELECT receipt FROM orders WHERE id=?', [$m[1]]);
+        if (!$r || empty($r['receipt'])) throw new ApiError(404, 'No receipt');
+        $path = receipts_dir() . '/' . basename($r['receipt']);
+        if (!is_file($path)) throw new ApiError(404, 'No receipt');
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $types = ['jpg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'pdf' => 'application/pdf'];
+        return ['raw', file_get_contents($path), $types[$ext] ?? 'application/octet-stream', basename($path)];
+    }
+
+    if ($R('GET', 'admin/notifications')) {
+        $after = (int)qs('after', '0');
+        $fix = function ($r) { $r['id'] = (int)$r['id']; $r['created'] = (int)$r['created']; $r['read'] = (int)$r['read']; return $r; };
+        $items = array_map($fix, q_all('SELECT * FROM notifications WHERE id>? ORDER BY id DESC LIMIT 100', [$after]));
+        $recent = $after === 0 ? array_map($fix, q_all('SELECT * FROM notifications ORDER BY id DESC LIMIT 30')) : [];
+        return [200, ['items' => $items, 'recent' => $recent,
+            'unread' => (int)q_val('SELECT COUNT(*) FROM notifications WHERE `read`=0'),
+            'latest' => (int)q_val('SELECT COALESCE(MAX(id),0) FROM notifications'),
+            'chatUnread' => (int)q_val("SELECT COUNT(*) FROM messages WHERE sender='customer' AND seen=0")]];
+    }
+    if ($R('POST', 'admin/notifications/read')) { q_exec('UPDATE notifications SET `read`=1'); return [200, ['ok' => true]]; }
+
+    if ($R('GET', 'admin/chats')) {
+        $rows = q_all("SELECT u.id,u.name,u.phone,
+            (SELECT body FROM messages m WHERE m.user_id=u.id ORDER BY m.id DESC LIMIT 1) AS `last`,
+            (SELECT MAX(created) FROM messages m WHERE m.user_id=u.id) AS lastAt,
+            (SELECT COUNT(*) FROM messages m WHERE m.user_id=u.id AND m.sender='customer' AND m.seen=0) AS unread
+            FROM users u WHERE u.role='customer' AND EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id) ORDER BY lastAt DESC");
+        return [200, ['threads' => array_map(function ($r) { $r['id'] = (int)$r['id']; $r['lastAt'] = (int)$r['lastAt']; $r['unread'] = (int)$r['unread']; return $r; }, $rows)]];
+    }
+    if ($R('GET', 'admin/chats/(\d+)')) {
+        $cu = q_one("SELECT id,name,phone,email,address,lat,lng,loc_at FROM users WHERE id=? AND role='customer'", [(int)$m[1]]);
+        if (!$cu) throw new ApiError(404, 'Customer not found');
+        $after = (int)qs('after', '0');
+        q_exec("UPDATE messages SET seen=1 WHERE user_id=? AND sender='customer'", [(int)$cu['id']]);
+        $cu['id'] = (int)$cu['id'];
+        foreach (['lat', 'lng'] as $k) if ($cu[$k] !== null) $cu[$k] = (float)$cu[$k];
+        if ($cu['loc_at'] !== null) $cu['loc_at'] = (int)$cu['loc_at'];
+        return [200, ['customer' => $cu, 'messages' => $msg_out(q_all('SELECT * FROM messages WHERE user_id=? AND id>? ORDER BY id LIMIT 300', [(int)$cu['id'], $after]))]];
+    }
+    if ($R('POST', 'admin/chats/(\d+)')) {
+        $cu = q_one("SELECT id FROM users WHERE id=? AND role='customer'", [(int)$m[1]]);
+        if (!$cu) throw new ApiError(404, 'Customer not found');
+        $text = clean($json()['body'] ?? '', 1000);
+        if ($text === '') throw new ApiError(400, 'Type a message first.');
+        $id = q_insert('INSERT INTO messages(user_id,sender,body,created,seen) VALUES(?,?,?,?,0)', [(int)$cu['id'], 'admin', $text, now()]);
+        q_exec("UPDATE messages SET seen=1 WHERE user_id=? AND sender='customer'", [(int)$cu['id']]);
+        return [200, ['message' => $one_msg($id)]];
+    }
+
+    if ($R('GET', 'admin/products')) {
+        $prods = array_map(function ($p) { foreach (['id', 'price', 'stock', 'active'] as $k) $p[$k] = (int)$p[$k]; return $p; }, q_all('SELECT * FROM products ORDER BY id'));
+        return [200, ['categories' => $cats(), 'products' => $prods]];
+    }
+
+    $product_fields = function ($d, $base = null) {
+        $b = $base ?: [];
+        if (array_key_exists('name', $d)) $b['name'] = clean($d['name'], 100);
+        if (array_key_exists('cat', $d)) {
+            if (!q_val('SELECT 1 FROM categories WHERE `key`=?', [str_val($d['cat'])])) throw new ApiError(400, 'Unknown category');
+            $b['cat'] = str_val($d['cat']);
+        }
+        foreach (['price', 'stock'] as $f) {
+            if (array_key_exists($f, $d)) {
+                if (!is_numeric($d[$f])) throw new ApiError(400, "Invalid $f");
+                $b[$f] = max(0, (int)$d[$f]);
+            }
+        }
+        if (array_key_exists('desc', $d)) $b['desc'] = clean($d['desc'], 300);
+        if (array_key_exists('active', $d)) $b['active'] = $d['active'] ? 1 : 0;
+        if (!empty($d['image']['data'])) {
+            $slug = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower(str_val($b['name'] ?? 'item'))), '-') ?: 'item';
+            $fn = save_data_url($d['image']['data'], product_img_dir(), $slug . '-' . bin2hex(random_bytes(3)), ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'], 4000000);
+            $b['img'] = 'images/products/' . $fn;
+        }
+        return $b;
+    };
+
+    if ($R('POST', 'admin/products/delete-soldout')) {   // one click: permanently remove every item that has no stock
+        return [200, ['ok' => true, 'deleted' => q_exec('DELETE FROM products WHERE stock<=0')]];
+    }
+    if ($R('POST', 'admin/products')) {
+        $p = $product_fields($json());
+        if (empty($p['name']) || !isset($p['cat']) || !isset($p['price']) || !isset($p['img'])) throw new ApiError(400, 'Name, category, price and photo are required.');
+        q_exec('INSERT INTO products(name,cat,price,stock,img,`desc`,active) VALUES(?,?,?,?,?,?,?)',
+            [$p['name'], $p['cat'], $p['price'], $p['stock'] ?? 0, $p['img'], $p['desc'] ?? '', $p['active'] ?? 1]);
+        return [200, ['ok' => true]];
+    }
+    if ($R('PUT', 'admin/products/(\d+)')) {
+        $row = q_one('SELECT * FROM products WHERE id=?', [(int)$m[1]]);
+        if (!$row) throw new ApiError(404, 'Not found');
+        $p = $product_fields($json(), $row);
+        q_exec('UPDATE products SET name=?,cat=?,price=?,stock=?,img=?,`desc`=?,active=? WHERE id=?',
+            [$p['name'], $p['cat'], (int)$p['price'], (int)$p['stock'], $p['img'], $p['desc'], (int)$p['active'], (int)$row['id']]);
+        $gone = ((int)$p['stock'] <= 0) ? sweep_soldout() : 0;
+        return [200, ['ok' => true, 'autoDeleted' => $gone]];
+    }
+    if ($R('DELETE', 'admin/products/(\d+)')) {   // permanent: gone from the shop and the admin list (past orders keep their own copy)
+        q_exec('DELETE FROM products WHERE id=?', [(int)$m[1]]);
+        return [200, ['ok' => true]];
+    }
+
+    if ($R('POST', 'admin/categories')) {
+        $label = clean($json()['label'] ?? '', 40);
+        $key = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($label)), '-');
+        if ($key === '') throw new ApiError(400, 'Enter a category name');
+        if (q_val('SELECT 1 FROM categories WHERE `key`=?', [$key])) throw new ApiError(409, 'Category already exists');
+        q_exec('INSERT INTO categories(`key`,label,sort) VALUES(?,?,?)', [$key, $label, (int)q_val('SELECT COALESCE(MAX(sort),0) FROM categories') + 1]);
+        return [200, ['ok' => true]];
+    }
+
+    if ($R('GET', 'admin/settings')) return [200, ['settings' => settings_for_admin()]];
+
+    if ($R('PUT', 'admin/settings')) {
+        $d = $json();
+        $s = get_settings();
+        $co = is_array($d['company'] ?? null) ? $d['company'] : []; $sh = is_array($d['shipping'] ?? null) ? $d['shipping'] : []; $pay = is_array($d['payments'] ?? null) ? $d['payments'] : [];
+        foreach (['name', 'crNumber', 'address', 'phone', 'email', 'whatsapp'] as $k) if (array_key_exists($k, $co)) $s['company'][$k] = clean($co[$k], 150);
+        if ($s['company']['email'] !== '' && !valid_email($s['company']['email'])) throw new ApiError(400, 'Company email is not valid.');
+        $s['company']['whatsapp'] = preg_replace('/\D/', '', $s['company']['whatsapp']);
+        foreach (['fee', 'freeFrom'] as $k) if (array_key_exists($k, $sh)) {
+            if (!is_numeric($sh[$k])) throw new ApiError(400, 'Shipping values must be numbers.');
+            $s['shipping'][$k] = max(0, (int)$sh[$k]);
+        }
+        $ib = is_array($pay['iban'] ?? null) ? $pay['iban'] : [];
+        foreach (['bankName', 'accountName', 'accountNumber', 'branch'] as $k) if (array_key_exists($k, $ib)) $s['payments']['iban'][$k] = clean($ib[$k], 100);
+        if (array_key_exists('enabled', $ib)) $s['payments']['iban']['enabled'] = (bool)$ib['enabled'];
+        if (array_key_exists('iban', $ib)) {
+            $v = strtoupper(preg_replace('/\s/', '', clean($ib['iban'], 40)));
+            if ($v !== '' && !iban_ok($v)) throw new ApiError(400, 'Invalid Qatar IBAN. It must be 29 characters starting with QA (e.g. QA58 DOHB 0000 1234 5678 90AB CDEF G) and pass the checksum.');
+            $s['payments']['iban']['iban'] = $v;
+        }
+        if (array_key_exists('swift', $ib)) {
+            $v = str_replace(' ', '', strtoupper(clean($ib['swift'], 11)));
+            if ($v !== '' && !preg_match('/^[A-Z]{4}QA[A-Z0-9]{2}([A-Z0-9]{3})?$/D', $v)) throw new ApiError(400, 'Invalid SWIFT/BIC for a Qatar bank (8 or 11 characters, e.g. XXXXQAQA).');
+            $s['payments']['iban']['swift'] = $v;
+        }
+        $fw = is_array($pay['fawran'] ?? null) ? $pay['fawran'] : [];
+        foreach (['accountName', 'bankName'] as $k) if (array_key_exists($k, $fw)) $s['payments']['fawran'][$k] = clean($fw[$k], 100);
+        if (array_key_exists('enabled', $fw)) $s['payments']['fawran']['enabled'] = (bool)$fw['enabled'];
+        if (array_key_exists('alias', $fw)) {
+            $v = str_replace(' ', '', clean($fw['alias'], 40));
+            if ($v !== '' && !(qa_mobile($v) || iban_ok($v))) throw new ApiError(400, 'Fawran alias must be a Qatar mobile number (8 digits) or a valid Qatar IBAN.');
+            $s['payments']['fawran']['alias'] = qa_mobile($v) ?: strtoupper($v);
+        }
+        $oo = is_array($pay['ooredoo'] ?? null) ? $pay['ooredoo'] : [];
+        if (array_key_exists('accountName', $oo)) $s['payments']['ooredoo']['accountName'] = clean($oo['accountName'], 100);
+        if (array_key_exists('enabled', $oo)) $s['payments']['ooredoo']['enabled'] = (bool)$oo['enabled'];
+        if (array_key_exists('number', $oo)) {
+            $v = clean($oo['number'], 20);
+            if ($v !== '' && !qa_mobile($v)) throw new ApiError(400, 'Ooredoo Money number must be a Qatar mobile number (8 digits).');
+            $s['payments']['ooredoo']['number'] = qa_mobile($v) ?: '';
+        }
+        if (array_key_exists('google', $d)) {
+            $gid = clean((is_array($d['google']) ? $d['google'] : [])['clientId'] ?? '', 200);
+            if ($gid !== '' && !preg_match('/^[\w-]+\.apps\.googleusercontent\.com$/D', $gid)) throw new ApiError(400, 'Google Client ID looks wrong. It ends with .apps.googleusercontent.com');
+            $s['google']['clientId'] = $gid;
+        }
+        $pemToWrite = null;
+        if (array_key_exists('applepay', $d) && is_array($d['applepay'])) {
+            $ai = $d['applepay'];
+            $a = &$s['applepay'];
+            if (array_key_exists('enabled', $ai)) $a['enabled'] = (bool)$ai['enabled'];
+            if (array_key_exists('sandbox', $ai)) $a['sandbox'] = (bool)$ai['sandbox'];
+            foreach (['merchantId' => 100, 'displayName' => 60, 'domain' => 120, 'publicKey' => 200] as $k => $mx) if (array_key_exists($k, $ai)) $a[$k] = clean($ai[$k], $mx);
+            if (!empty($ai['secretKey'])) $a['secretKey'] = clean($ai['secretKey'], 200);   // blank = keep the saved one
+            if (array_key_exists('domainFile', $ai)) $a['domainFile'] = slice(trim(str_val($ai['domainFile'])), 5000);
+            $pem = trim(str_val($ai['identityPem'] ?? ''));
+            if ($pem !== '' && (strpos($pem, '-----BEGIN CERTIFICATE-----') === false || strpos($pem, 'PRIVATE KEY-----') === false))
+                throw new ApiError(400, 'Paste BOTH the certificate and the private key (PEM text) in the Apple Pay certificate box.');
+            $miss = applepay_missing($a, $pem !== '' || is_file(identity_pem()));
+            if (!empty($a['enabled']) && $miss) throw new ApiError(400, 'Apple Pay cannot be switched on yet. Still needed: ' . implode(', ', $miss) . '.');
+            if ($pem !== '') $pemToWrite = $pem;
+            unset($a);
+        }
+        if (array_key_exists('shop', $d)) $s['shop']['autoDeleteSoldOut'] = !empty((is_array($d['shop']) ? $d['shop'] : [])['autoDeleteSoldOut']);
+        if ($pemToWrite !== null) {
+            if (!is_dir(dirname(identity_pem()))) @mkdir(dirname(identity_pem()), 0750, true);
+            file_put_contents(identity_pem(), $pemToWrite . "\n");
+            @chmod(identity_pem(), 0600);
+        }
+        save_settings($s);
+        $swept = sweep_soldout();
+        $out = settings_for_admin();
+        $out['swept'] = $swept;
+        return [200, ['settings' => $out]];
+    }
+
+    if ($R('GET', 'admin/enquiries')) {
+        return [200, ['enquiries' => array_map(function ($r) { $r['id'] = (int)$r['id']; $r['created'] = (int)$r['created']; return $r; }, q_all('SELECT * FROM enquiries ORDER BY id DESC'))]];
+    }
+    if ($R('PUT', 'admin/enquiries/(\d+)')) {
+        $st = clean($json()['status'] ?? '', 20);
+        if (!in_array($st, ['New', 'Replied', 'Closed'], true)) throw new ApiError(400, 'Invalid status');
+        q_exec('UPDATE enquiries SET status=? WHERE id=?', [$st, (int)$m[1]]);
+        return [200, ['ok' => true]];
+    }
+    if ($R('DELETE', 'admin/enquiries/(\d+)')) {   // permanently remove an enquiry (and the contact details in it)
+        q_exec('DELETE FROM enquiries WHERE id=?', [(int)$m[1]]);
+        return [200, ['ok' => true]];
+    }
+
+    if ($R('GET', 'admin/customers')) {
+        $rows = q_all("SELECT u.id,u.name,u.email,u.phone,u.address,u.created,u.lat,u.lng,u.loc_at,
+            (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) AS orders,
+            (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id AND o.status NOT IN ('Delivered','Cancelled')) AS openOrders,
+            (SELECT COALESCE(SUM(total),0) FROM orders o WHERE o.user_id=u.id AND o.status<>'Cancelled') AS spent
+            FROM users u WHERE role='customer' ORDER BY u.id DESC");
+        return [200, ['customers' => array_map(function ($r) {
+            foreach (['id', 'created', 'orders', 'openOrders', 'spent'] as $k) $r[$k] = (int)$r[$k];
+            foreach (['lat', 'lng'] as $k) if ($r[$k] !== null) $r[$k] = (float)$r[$k];
+            if ($r['loc_at'] !== null) $r['loc_at'] = (int)$r['loc_at'];
+            return $r;
+        }, $rows)]];
+    }
+
+    if ($R('DELETE', 'admin/customers/(\d+)')) {
+        // Permanently erase a customer's contact details.  ?orders=keep  -> their past orders stay for your accounts
+        //                                                   ?orders=delete -> their orders (and receipts) are erased too
+        $cid = (int)$m[1];
+        $cu = q_one("SELECT id,name FROM users WHERE id=? AND role='customer'", [$cid]);
+        if (!$cu) throw new ApiError(404, 'Customer not found');
+        $mode = qs('orders', 'keep');
+        $orders = q_all('SELECT * FROM orders WHERE user_id=?', [$cid]);
+        if ($mode === 'delete') {
+            foreach ($orders as $o) {
+                if (in_array($o['status'], ['Awaiting payment', 'Payment submitted'], true)) restore_stock($o);   // unpaid: put the items back on sale
+                if (!empty($o['receipt'])) @unlink(receipts_dir() . '/' . basename($o['receipt']));
+                q_exec('DELETE FROM order_events WHERE order_id=?', [$o['id']]);
+                q_exec('DELETE FROM orders WHERE id=?', [$o['id']]);
+            }
+            sweep_soldout();
+        } else {
+            q_exec('UPDATE orders SET user_id=0 WHERE user_id=?', [$cid]);   // orders stay, but no longer linked to an account
+        }
+        q_exec('DELETE FROM messages WHERE user_id=?', [$cid]);
+        q_exec("DELETE FROM notifications WHERE kind='chat' AND ref=?", [(string)$cid]);
+        q_exec('DELETE FROM sessions WHERE user_id=?', [$cid]);
+        q_exec('DELETE FROM users WHERE id=?', [$cid]);
+        return [200, ['ok' => true, 'ordersDeleted' => $mode === 'delete' ? count($orders) : 0, 'ordersKept' => $mode === 'delete' ? 0 : count($orders)]];
+    }
+
+    if ($R('GET', 'admin/stats')) {
+        $midnight = strtotime('today');
+        $paid = "('Payment confirmed','Preparing','Out for delivery','Delivered')";
+        $one = function ($sql, $p = []) { return (int)q_val($sql, $p); };
+        $days = [];
+        for ($i = 6; $i >= 0; $i--) {
+            $a = $midnight - $i * 86400; $b = $midnight - ($i - 1) * 86400;
+            $days[] = ['label' => date('D', $a + 43200),
+                'orders' => $one("SELECT COUNT(*) FROM orders WHERE created>=? AND created<? AND status<>'Cancelled'", [$a, $b]),
+                'revenue' => $one("SELECT COALESCE(SUM(total),0) FROM orders WHERE created>=? AND created<? AND status IN $paid", [$a, $b])];
+        }
+        $month = strtotime(date('Y-m-01'));
+        $low = array_map(function ($r) { $r['id'] = (int)$r['id']; $r['stock'] = (int)$r['stock']; return $r; }, q_all('SELECT id,name,stock FROM products WHERE stock>0 AND stock<=5 ORDER BY stock'));
+        return [200, [
+            'ordersToday' => $one("SELECT COUNT(*) FROM orders WHERE created>=? AND status<>'Cancelled'", [$midnight]),
+            'toVerify' => $one("SELECT COUNT(*) FROM orders WHERE status='Payment submitted'"),
+            'awaitingPayment' => $one("SELECT COUNT(*) FROM orders WHERE status='Awaiting payment'"),
+            'toDeliver' => $one("SELECT COUNT(*) FROM orders WHERE status IN ('Payment confirmed','Preparing','Out for delivery')"),
+            'revenueMonth' => $one("SELECT COALESCE(SUM(total),0) FROM orders WHERE created>=? AND status IN $paid", [$month]),
+            'revenueAll' => $one("SELECT COALESCE(SUM(total),0) FROM orders WHERE status IN $paid"),
+            'customers' => $one("SELECT COUNT(*) FROM users WHERE role='customer'"),
+            'newCustomers7' => $one("SELECT COUNT(*) FROM users WHERE role='customer' AND created>=?", [$midnight - 6 * 86400]),
+            'chatUnread' => $one("SELECT COUNT(*) FROM messages WHERE sender='customer' AND seen=0"),
+            'newEnquiries' => $one("SELECT COUNT(*) FROM enquiries WHERE status='New'"),
+            'soldOut' => $one('SELECT COUNT(*) FROM products WHERE stock<=0'),
+            'lowStock' => $low, 'days' => $days, 'currency' => CURRENCY]];
+    }
+
+    throw new ApiError(404, 'Not found');
+}

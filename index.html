@@ -1,0 +1,165 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lofan Home Accessories | Embroidered Pieces for Every Occasion</title>
+<meta name="description" content="Lofan Development & Trading – embroidered napkins, placemats, trays, coasters and custom home accessories in Qatar.">
+<link rel="icon" href="images/logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span></span>
+  <p id="shipNoteTop">Free shipping on orders above 500 QAR</p>
+  <nav><button id="accountBtn">My Account</button><i>|</i><button id="searchBtn">Search</button><i>|</i><button id="cartBtn">Cart (<span id="cartCount">0</span>)</button></nav>
+</div>
+
+<header class="header" id="top">
+  <button class="burger" id="burger" aria-label="Menu"><span></span><span></span><span></span></button>
+  <nav class="nav nav-left">
+    <a href="#top" class="active">Home</a><a href="#shop">Shop</a><a href="#about">About</a>
+  </nav>
+  <a href="#top" class="brand">
+    <img src="images/logo.jpg" alt="Lofan">
+    <small>Home Accessories</small>
+  </a>
+  <nav class="nav nav-right">
+    <a href="#custom">Custom Orders</a><a href="#contact">Contact</a>
+  </nav>
+</header>
+
+<div class="searchbar" id="searchbar">
+  <input id="searchInput" type="search" placeholder="Search napkins, placemats, coasters…">
+</div>
+
+<main>
+<!-- HERO -->
+<section class="hero">
+  <img src="images/hero-scene.jpg" alt="Embroidered placemats and napkin on a travertine table" class="hero-img">
+  <div class="hero-text">
+    <p class="eyebrow">Timeless Details</p>
+    <h1>For a More<br><em>Beautiful Home</em></h1>
+    <span class="rule"></span>
+    <p class="sub">Embroidered pieces<br>for every occasion</p>
+    <a href="#shop" class="btn">Shop Now <b>&rarr;</b></a>
+  </div>
+</section>
+
+<!-- CATEGORIES -->
+<section class="cats">
+  <a href="#shop" data-filter="napkins" class="cat"><img src="images/napkins.jpg" alt="Napkins"><span>Napkins <b>&rarr;</b></span></a>
+  <a href="#shop" data-filter="placemats" class="cat"><img src="images/placemat-1.jpg" alt="Placemats"><span>Placemats <b>&rarr;</b></span></a>
+  <a href="#shop" data-filter="coasters" class="cat"><img src="images/coasters.jpg" alt="Trays and coasters"><span>Trays &amp; Coasters <b>&rarr;</b></span></a>
+  <a href="#custom" class="cat"><img src="images/custom.jpg" alt="Custom pieces"><span>Custom Pieces <b>&rarr;</b></span></a>
+</section>
+
+<!-- SHOP -->
+<section class="section" id="shop">
+  <p class="eyebrow center">The Curated Collection</p>
+  <h2 class="center">Embroidered pieces <em>for every occasion</em></h2>
+  <div class="filters" id="filters">
+    <button class="on" data-filter="all">All</button>
+    <button data-filter="napkins">Napkins</button>
+    <button data-filter="placemats">Placemats</button>
+    <button data-filter="coasters">Trays &amp; Coasters</button>
+  </div>
+  <div class="grid" id="productGrid"></div>
+  <p class="empty" id="emptyMsg" hidden>No pieces match your search.</p>
+</section>
+
+<!-- CART -->
+<section class="section" id="cart">
+  <p class="eyebrow center">Your Selection</p>
+  <h2 class="center">Shopping <em>cart</em></h2>
+  <div class="cart-wrap">
+    <div id="cartList"></div>
+    <aside class="summary" id="cartSummary"></aside>
+  </div>
+</section>
+
+<!-- STORY / VIDEO -->
+<section class="story" id="about">
+  <div class="story-video">
+    <video src="videos/lofan.mp4" poster="images/hero-banner.jpg" autoplay muted loop playsinline controls></video>
+  </div>
+  <div class="story-text">
+    <p class="eyebrow">About Lofan</p>
+    <h2>Crafted with <em>quiet detail</em></h2>
+    <span class="rule"></span>
+    <p>Lofan Development &amp; Trading is a Qatar-based company bringing refined home accessories to homes, hospitality venues and businesses. Every napkin, placemat and coaster carries hand-finished embroidery in a calm, natural palette of linen and sage.</p>
+    <p>Beyond our curated collection, we supply commercial and bulk orders, and create custom pieces – from monogrammed napkins to tassel-finished table sets – tailored to your occasion.</p>
+    <ul class="points">
+      <li><strong>Embroidered</strong> by detail</li>
+      <li><strong>Commercial</strong> &amp; wholesale supply</li>
+      <li><strong>Custom</strong> colours &amp; designs</li>
+      <li><strong>Delivery</strong> across Qatar</li>
+    </ul>
+  </div>
+</section>
+
+<!-- CUSTOM / ENQUIRY -->
+<section class="section enquiry" id="custom">
+  <div class="enq-img"><img src="images/custom.jpg" alt="Custom tassel napkin"></div>
+  <div class="enq-form">
+    <p class="eyebrow">Custom &amp; Commercial Orders</p>
+    <h2>Request a <em>quotation</em></h2>
+    <p class="lead">Hotels, restaurants, gifting and events – tell us what you need and our team will respond with a tailored proposal.</p>
+    <form id="enquiryForm" novalidate>
+      <div class="row">
+        <label>Full name<input name="name" required></label>
+        <label>Company<input name="company"></label>
+      </div>
+      <div class="row">
+        <label>Email<input type="email" name="email" required></label>
+        <label>Phone / WhatsApp<input name="phone" required></label>
+      </div>
+      <div class="row">
+        <label>Enquiry type
+          <select name="type">
+            <option>Commercial / bulk order</option>
+            <option>Custom embroidery</option>
+            <option>Gifting &amp; events</option>
+            <option>General question</option>
+          </select>
+        </label>
+        <label>Estimated quantity<input name="qty" placeholder="e.g. 200 pieces"></label>
+      </div>
+      <label>Message<textarea name="message" rows="4" required placeholder="Describe the pieces, colours, logo or embroidery you need…"></textarea></label>
+      <button class="btn" type="submit">Send Enquiry <b>&rarr;</b></button>
+      <p class="note" id="formNote"></p>
+    </form>
+  </div>
+</section>
+
+<!-- CONTACT -->
+<section class="section contact" id="contact">
+  <p class="eyebrow center">Contact</p>
+  <h2 class="center">Visit or <em>reach out</em></h2>
+  <div class="contact-grid">
+    <div><h3>Location</h3><p id="cAddr">Doha, State of Qatar</p></div>
+    <div><h3>Email</h3><p><a id="cEmail" href="mailto:info@lofan.qa">info@lofan.qa</a></p></div>
+    <div><h3>Phone / WhatsApp</h3><p><a id="cPhone" href="tel:+97466404222">+974 6640 4222</a></p></div>
+    <div><h3>Hours</h3><p>Sat – Thu, 9am – 9pm</p></div>
+  </div>
+  <p class="center contact-wa"><a id="cWa" class="btn" target="_blank" rel="noopener" href="#">Chat with us on WhatsApp</a></p>
+</section>
+</main>
+
+<footer class="footer">
+  <img src="images/logo.jpg" alt="Lofan">
+  <p>Timeless details for a more beautiful home.</p>
+  <nav><a href="#shop">Shop</a><a href="#about">About</a><a href="#custom">Custom Orders</a><a href="#contact">Contact</a><a href="admin.html">Admin</a></nav>
+  <small>&copy; <span id="year"></span> Lofan Development &amp; Trading. All rights reserved.</small>
+</footer>
+
+<div class="toast" id="toast"></div>
+<script src="js/common.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
+

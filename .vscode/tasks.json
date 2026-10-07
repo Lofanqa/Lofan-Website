@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Lofan website",
+      "type": "shell",
+      "command": "python server.py --open",
+      "isBackground": true,
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "focus": false },
+      "runOptions": { "runOn": "folderOpen" }
+    }
+  ]
+}

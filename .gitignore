@@ -1,0 +1,24 @@
+# Local data and secrets - never upload these to GitHub
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+__pycache__/
+*.pyc
+dist/
+_tmp*
+*.log
+
+# Hosting server secrets / runtime files
+hosting/private/config.php
+hosting/private/installed.lock
+hosting/private/force_https.flag
+hosting/private/receipts/*
+hosting/private/applepay/*
+hosting/private/throttle/*
+
+# Editor / OS
+.vscode/settings.json
+Thumbs.db
+.DS_Store

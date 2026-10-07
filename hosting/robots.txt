@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /admin.html
+Disallow: /payment.html
+Disallow: /account.html
+Disallow: /api/
+Disallow: /private/
+Disallow: /install.php

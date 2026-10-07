@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lofan Admin</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="icon" href="images/logo.jpg">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="admin">
+
+<div class="topbar"><span></span><p>Lofan Admin</p><nav><a href="index.html">&larr; View website</a></nav></div>
+
+<!-- LOGIN / FIRST-TIME SETUP -->
+<section id="gate" class="adm-login">
+  <img src="images/logo.jpg" alt="Lofan" class="adm-logo">
+  <div id="gateBody"><p class="muted">Loading…</p></div>
+</section>
+
+<!-- DASHBOARD -->
+<main id="app" class="adm" hidden>
+  <div class="adm-head">
+    <h2>Lofan <em>dashboard</em></h2>
+    <div class="adm-tabs" id="tabs">
+      <button data-tab="overview" class="on">Overview</button>
+      <button data-tab="orders">Orders <b class="badge" id="badgeOrders" hidden>0</b></button>
+      <button data-tab="notifs">Notifications <b class="badge" id="badgeNotifs" hidden>0</b></button>
+      <button data-tab="chats">Chat <b class="badge" id="badgeChats" hidden>0</b></button>
+      <button data-tab="products">Products &amp; Stock</button>
+      <button data-tab="enquiries">Enquiries</button>
+      <button data-tab="customers">Customers</button>
+      <button data-tab="settings">Company &amp; Payments</button>
+      <button id="logout">Log out</button>
+    </div>
+  </div>
+  <div id="panel"></div>
+</main>
+
+<div id="popups" class="popups" aria-live="polite"></div>
+<div class="toast" id="toast"></div>
+<script src="js/common.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>
+
