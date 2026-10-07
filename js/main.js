@@ -73,7 +73,7 @@ $('#productGrid').addEventListener('click', e => {
 });
 
 function addToCart(id, qty = 1) {
-  if (OFFLINE) { toast('Start the server (python server.py) to place orders.'); return false; }
+  if (OFFLINE) { toast(IS_LOCAL ? 'Start the server (python server.py) to place orders.' : 'The shop is temporarily unavailable – please try again in a moment.'); return false; }
   const p = product(id), cart = Cart.get(), row = cart.find(i => i.id === id), have = row ? row.qty : 0;
   if (!p || p.stock <= 0) { toast('Sorry, this item is sold out.'); return false; }
   if (have + qty > p.stock) { toast(`Only ${p.stock} available${have ? ` (you already have ${have} in your cart)` : ''}.`); return false; }
