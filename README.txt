@@ -9,9 +9,14 @@ START IT (VS Code)
      or open Terminal (Ctrl+`) and type:   python server.py
   3. Always use  http://localhost:8000  (Start-Lofan.bat = the same thing, one double-click).
   Stop with Ctrl+C in the terminal / close the black window.
+  The local server runs the SAME PHP code as lofan.qa (with a small local database in data/dev.sqlite), so what you
+  test here behaves exactly like the live site. (python server.py needs PHP: it is already installed in
+  C:\Users\<you>\lofan-tools\php. The old pure-Python server is kept in the folder  legacy/  and is no longer used.)
   Live Server (Go Live, port 5500) cannot run the shop or accounts by itself, but if you open it
   while the server is running, the page now jumps to http://localhost:8000 automatically.
-  The red "server is not running" banner only appears when the Python server is switched off.
+  The red "server is not running" banner only appears when the local server is switched off.
+  Your local test data (data/ folder) is separate from the live website's database - they never mix.
+  See the phone layout: in Chrome press F12, then the phone icon at the top-left of the developer panel.
 
 PAGES
   index.html    Home, shop, cart, enquiry form
@@ -21,8 +26,9 @@ PAGES
 
 FIRST TIME: CREATE THE ADMIN ACCOUNT
   Open http://localhost:8000/admin.html -> the first visit shows "Create the admin account".
-  Enter your name, email and a password (min. 8 characters). That is your admin login.
-  Customers can never become admins. Only one admin can be created this way.
+  Enter your name, email and a password (min. 8 characters). That is your admin login (the OWNER).
+  Customers can never become admins. More admin accounts (up to 10, "Owner" or "Staff") are added by the owner in
+  Admin > Security. There you also see who is signed in, the access & activity log, and "Reset test data".
 
 THEN: ADD COMPANY & BANK DETAILS  (Admin -> Company & Payments)
   - Company name, CR number, address, phone, email
@@ -39,13 +45,21 @@ HOW A CUSTOMER ORDERS
   2. If not signed in, a pop-up makes them create an account (name, mobile, email, password).
   3. payment.html: delivery details -> order is created (stock reserved) -> they pick
      IBAN / Fawran / Ooredoo Money, see your details and a payment reference (e.g. LF-AB12CD),
-     pay from their bank app, then enter the transaction number (receipt optional).
+     pay from their bank app, then enter the transaction number and upload the receipt screenshot.
   4. They track the order in My Account > My Orders (updates every 15 seconds).
+  An order is NOT confirmed until its payment is verified: it shows "awaiting payment" -> "verifying payment" ->
+  "Order confirmed" only after YOU press "Confirm payment" (a receipt screenshot is required by default; unpaid orders are
+  released after 24 hours - both can be changed in Admin > Company & Payments > Order rules).
 
 HOW YOU GET NOTIFIED (keep admin.html open in a tab)
   - Pop-up + sound when a customer places an order, when they submit a payment, and when
     someone sends an enquiry. Red badges on the tabs, and the browser tab title shows (n).
   - Allow browser notifications when asked, to also get alerts when the tab is in the background.
+  - Notifications tab: delete one notification, "Delete read" or "Delete all". Chat: the x next to a message deletes it,
+    "Clear chat" empties a conversation.
+  - Phone alerts: Admin > Company & Payments > "Order alerts to your phone" sends an SMS (needs an SMS provider account,
+    e.g. Twilio) and/or a free Telegram message for every order: items, customer name, time and location.
+    Step-by-step: hosting/README-HOSTING.txt ("ORDER ALERTS TO YOUR PHONE").
 
 AFTER A PAYMENT IS SUBMITTED
   Admin > Orders: check your bank / Fawran / Ooredoo Money statement for the reference and
@@ -73,7 +87,7 @@ APPLE PAY SETUP  (what you need before customers can pay with Apple Pay)
   Apple Pay cannot be switched on from code alone - Apple and a payment provider must approve your shop.
   1. Business side: a company bank account in Qatar and a payment provider ("acquirer") that supports
      Apple Pay for Qatar merchants / QAR. The code has a ready adapter for Checkout.com; others
-     (MyFatoorah, Tap, PayTabs, ...) need a small change in psp_charge() in server.py.
+     (MyFatoorah, Tap, PayTabs, ...) need a small change in psp_charge() in hosting/private/lib.php.
      Open a merchant account with the provider and get its PUBLIC key and SECRET key (start with the sandbox keys).
   2. Apple Developer account (99 USD / year) at developer.apple.com.
   3. In Certificates, Identifiers & Profiles > Identifiers > Merchant IDs: create a Merchant ID (e.g. merchant.com.lofan).
@@ -150,37 +164,36 @@ SHOP ITEMS
   Custom Pieces). Nothing is ever removed by updates; manage items in Admin > Products & Stock.
   If you open the site without the server running, the shop still displays the catalogue
   (browse only) with a red banner telling you to start the server.
-WHERE DATA LIVES
-  data/lofan.db        accounts, orders, products, settings (back this file up!)
-  data/receipts/       uploaded payment receipts
+WHERE DATA LIVES  (on this PC)
+  data/dev.sqlite      accounts, orders, products, settings of your LOCAL test copy (back this file up if it matters)
+  data/receipts/       uploaded payment receipts (local test)
   images/products/     photos of items you add
   Do not share the data folder. The server never serves it to visitors.
+  (On lofan.qa the same information is in the MySQL database and in public_html/private.)
 
 PUBLISH ON lofan.qa (cPanel hosting)  <- the easy way
-  1. Double-click Build-Hosting-Zip.bat  -> creates dist\lofan-cpanel.zip (website + PHP/MySQL server).
-  2. Follow hosting\README-HOSTING.txt (also inside the zip): create a MySQL database, upload + extract the zip in
-     public_html, open /install.php, run AutoSSL for https, create the admin account.
-  3. To preview the exact hosting version on this PC first:  python build_hosting_package.py --preview  (http://localhost:8020)
-  4. To also copy today's customers/orders from this PC to the hosting:  python build_hosting_package.py --full
-  Your local Python server (Start-Lofan.bat) is only for working on the site on this PC; the live site uses PHP + MySQL.
+  1. Double-click Build-Hosting-Zip.bat  -> creates two files in the dist folder:
+       dist\lofan-cpanel.zip   FIRST install only (website + PHP/MySQL server + installer)
+       dist\lofan-update.zip   every later update (keeps your live database, customers and orders)
+  2. First time: follow hosting\README-HOSTING.txt (also inside the zip): create a MySQL database, upload + extract the
+     zip in public_html, open /install.php, run AutoSSL for https, create the admin account.
+  3. Already published? Upload dist\lofan-update.zip in cPanel > File Manager > public_html, Extract (overwrite), Ctrl+F5.
+     Your database is not touched and new database fields are added automatically.
+  4. Remove the test customers/orders from the live site before selling: Admin > Security > Reset test data.
+  5. To preview the exact hosting version on this PC first:  python build_hosting_package.py --preview  (http://localhost:8020)
+  6. To also copy today's customers/orders from this PC to the hosting:  python build_hosting_package.py --full
+  The local server (Start-Lofan.bat / python server.py) is only for working on the site on this PC; the live site uses
+  PHP + MySQL with the same code.
 
-SELLING TO REAL CUSTOMERS (alternative: your own server / VPS)
-  Right now the site only runs on YOUR computer (localhost). To sell to customers it must run
-  on an always-on server with a web address:
-  1. Rent a small cloud server (VPS) - e.g. DigitalOcean, Hetzner, Vultr, AWS Lightsail
-     (about 5 USD/month, Ubuntu, 1 GB RAM is enough). Python 3 is already included.
-  2. Buy a domain (e.g. lofan.qa or lofan.com) and point it (A record) to the server's IP.
-  3. Copy the whole Lofan-Website folder to the server, then run:  python3 server.py
-     Keep it running with a service (systemd) so it restarts by itself.
-  4. Put HTTPS in front of it (Caddy is simplest: one line "lofan.qa { reverse_proxy localhost:8000 }"
-     and it gets a free certificate). Customers must use https:// for security and for Google sign-in.
-  5. In Google Cloud add your https://lofan.qa address under Authorised JavaScript origins.
-  6. Open https://lofan.qa/admin.html, create the admin account, enter bank/Fawran/Ooredoo
-     details, check prices and stock - then share the link / QR code with customers.
-  7. Back up data/lofan.db and data/receipts/ regularly (daily copy).
-  Payments: customers pay by IBAN / Fawran / Ooredoo Money and you confirm each payment in admin.
-  Taking card payments needs a payment gateway (e.g. MyFatoorah, Stripe, Checkout.com).
-  Tip: ask us to prepare the ready-to-upload server setup (systemd + Caddy files) when you pick a host.
+SELLING TO REAL CUSTOMERS
+  The live site is on cPanel hosting (lofan.qa) - see "PUBLISH ON lofan.qa" above. Before announcing it:
+  1. Open https://lofan.qa/admin.html, enter your REAL bank / Fawran / Ooredoo Money details, check prices and stock.
+  2. Admin > Security > Reset test data (removes the test customers and orders).
+  3. Set up the phone alerts (SMS / Telegram) and add admin accounts for your team (Admin > Security).
+  4. In Google Cloud add https://lofan.qa under Authorised JavaScript origins (only if you use Google sign-in).
+  5. Back up weekly (cPanel > Backup, or phpMyAdmin > Export) - see hosting/README-HOSTING.txt.
+  Payments: customers pay by IBAN / Fawran / Ooredoo Money and you confirm each payment in admin (free for both sides).
+  Taking card payments automatically needs a payment gateway / merchant account from a Qatar bank or provider (fees apply).
 IMPORTANT
   The IBAN in examples (QA58 DOHB 0000 1234 5678 90AB CDEF G) is a public sample, not real.
   Enter your real company IBAN before accepting payments.

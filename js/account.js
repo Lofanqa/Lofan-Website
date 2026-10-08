@@ -1,10 +1,13 @@
 /* LOFAN – customer account: orders with live status tracking + profile */
 $('#year').textContent = new Date().getFullYear();
 const FLOW = ['Awaiting payment', 'Payment submitted', 'Payment confirmed', 'Preparing', 'Out for delivery', 'Delivered'];
+// What the customer sees: an order is only "confirmed" after the payment has been verified
+const LABEL = { 'Awaiting payment': 'Not confirmed – awaiting payment', 'Payment submitted': 'Verifying your payment', 'Payment confirmed': 'Order confirmed' };
+const STEP = { 'Awaiting payment': 'Awaiting payment', 'Payment submitted': 'Verifying payment', 'Payment confirmed': 'Order confirmed' };
 const BLURB = {
-  'Awaiting payment': 'Waiting for your payment.',
-  'Payment submitted': 'We received your payment details and are verifying them.',
-  'Payment confirmed': 'Payment confirmed – thank you!',
+  'Awaiting payment': 'Your order is NOT confirmed yet. Please complete the payment – the items are only reserved for you for a limited time.',
+  'Payment submitted': 'We received your payment details and are verifying them. Your order will be confirmed as soon as the payment is verified.',
+  'Payment confirmed': 'Order confirmed – your payment was verified. Thank you!',
   'Preparing': 'Your order is being prepared.',
   'Out for delivery': 'Your order is on its way.',
   'Delivered': 'Delivered. Enjoy!',
@@ -23,13 +26,13 @@ $('#logoutBtn').addEventListener('click', logout);
 function progress(o) {
   if (o.status === 'Cancelled') return '';
   const idx = FLOW.indexOf(o.status);
-  return `<ol class="track">${FLOW.map((s, i) => `<li class="${i <= idx ? 'done' : ''} ${i === idx ? 'now' : ''}"><i></i><span>${s}</span></li>`).join('')}</ol>`;
+  return `<ol class="track">${FLOW.map((s, i) => `<li class="${i <= idx ? 'done' : ''} ${i === idx ? 'now' : ''}"><i></i><span>${STEP[s] || s}</span></li>`).join('')}</ol>`;
 }
 async function loadOrders() {
   const { orders } = await api('/orders');
   $('#orderList').innerHTML = orders.length ? orders.map(o => `
     <article class="ord big">
-      <div class="ord-top"><strong>${o.id}</strong><span class="tag ${tagClass(o.status)}">${esc(o.status)}</span></div>
+      <div class="ord-top"><strong>${o.id}</strong><span class="tag ${tagClass(o.status)}">${esc(LABEL[o.status] || o.status)}</span></div>
       <p class="muted small">${fmtDate(o.created)} · ${o.items.reduce((s, i) => s + i.qty, 0)} items · <strong>${money(o.total)}</strong>${o.method ? ' · ' + esc(o.method) : ''}</p>
       <p class="small">${o.items.map(i => `${esc(i.name)} × ${i.qty}`).join(', ')}</p>
       <p class="blurb">${BLURB[o.status] || ''}</p>

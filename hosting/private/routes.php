@@ -72,8 +72,16 @@ function handle_api($method, $route, $body)
         $ok = false;
         if ($u && !empty($u['hash'])) $ok = check_pw($pw, $u);
         elseif ($u && !empty($u['google_sub'])) throw new ApiError(401, 'This account uses Google. Please choose "Continue with Google".');
-        if (!$ok) throw new ApiError(401, 'Incorrect email/phone or password.');
-        start_session($u['id']);
+        if (!$ok) {
+            if ($u && $u['role'] === 'admin') log_admin('login_failed', 'Wrong password for ' . $u['email'], $u, true);
+            throw new ApiError(401, 'Incorrect email/phone or password.');
+        }
+        if (!empty($u['disabled'])) {
+            log_admin('login_blocked', 'Disabled account tried to sign in: ' . $u['email'], $u, true);
+            throw new ApiError(401, 'This account has been disabled. Please contact the owner.');
+        }
+        start_session($u['id'], $u['role'] === 'admin');
+        if ($u['role'] === 'admin') log_admin('login', 'Signed in', $u);
         return [200, ['user' => public_user($u)]];
     }
 
@@ -114,6 +122,8 @@ function handle_api($method, $route, $body)
     }
 
     if ($R('POST', 'logout')) {
+        $cu = current_user();
+        if ($cu && $cu['role'] === 'admin') log_admin('logout', 'Signed out', $cu);
         $tok = $_COOKIE['lofan_session'] ?? '';
         if ($tok !== '' && preg_match('/^[A-Za-z0-9_-]+$/D', $tok)) q_exec('DELETE FROM sessions WHERE token=?', [$tok]);
         set_session_cookie('', time() - 3600);
@@ -146,8 +156,9 @@ function handle_api($method, $route, $body)
         if (strlen($name) < 2 || !valid_email($email)) throw new ApiError(400, 'Enter a name and a valid email.');
         if (strlen($pw) < 8) throw new ApiError(400, 'Admin password must be at least 8 characters.');
         if (q_val('SELECT 1 FROM users WHERE email=?', [$email])) throw new ApiError(409, 'That email is already used by a customer account.');
-        $id = q_insert("INSERT INTO users(name,email,phone,salt,`hash`,role,created) VALUES(?,?,?,?,?,?,?)", [$name, $email, 'admin-' . bin2hex(random_bytes(4)), '', hash_new_pw($pw), 'admin', now()]);
-        start_session($id);
+        $id = q_insert("INSERT INTO users(name,email,phone,salt,`hash`,role,created,admin_level) VALUES(?,?,?,?,?,?,?,?)", [$name, $email, 'admin-' . bin2hex(random_bytes(4)), '', hash_new_pw($pw), 'admin', now(), 'owner']);
+        start_session($id, true);
+        log_admin('admin.setup', 'First admin (owner) account created: ' . $email, user_by_id($id));
         return [200, ['user' => public_user(user_by_id($id))]];
     }
 
@@ -184,6 +195,8 @@ function handle_api($method, $route, $body)
         $new = str_val($d['new'] ?? '');
         if (strlen($new) < ($u['role'] === 'admin' ? 8 : 6)) throw new ApiError(400, 'New password is too short.');
         q_exec("UPDATE users SET salt='', `hash`=? WHERE id=?", [hash_new_pw($new), (int)$u['id']]);
+        q_exec('DELETE FROM sessions WHERE user_id=? AND token<>?', [(int)$u['id'], session_token()]);   // other devices are signed out
+        if ($u['role'] === 'admin') log_admin('password.change', 'Changed own password', $u);
         return [200, ['ok' => true]];
     }
 
@@ -230,6 +243,7 @@ function handle_api($method, $route, $body)
         q_exec("UPDATE users SET address=? WHERE id=? AND (address IS NULL OR address='')", [$delivery['address'], (int)$u['id']]);
         $n = array_sum(array_column($lines, 'qty'));
         notify('order', "New order $oid", $delivery['name'] . ' · ' . $n . ' item' . ($n != 1 ? 's' : '') . ' · ' . ($subtotal + $shipping) . ' ' . CURRENCY . ' · awaiting payment', $oid);
+        queue_alert('placed', $oid);
         return [200, ['order' => order_out(order_by_id($oid))]];
     }
 
@@ -249,6 +263,7 @@ function handle_api($method, $route, $body)
         $u = need_user(); $d = $json(); $oid = $m[1];
         $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
         if (!$r) throw new ApiError(404, 'Order not found');
+        if ($r['status'] === 'Cancelled') throw new ApiError(409, 'This order was cancelled (it was not paid in time). Please place a new order.');
         if ($r['status'] !== 'Awaiting payment') throw new ApiError(409, 'Payment was already submitted for this order.');
         $meth = null;
         foreach (payment_info()['methods'] as $x) if ($x['id'] === clean($d['method'] ?? '', 20)) $meth = $x;
@@ -260,10 +275,13 @@ function handle_api($method, $route, $body)
         if (is_array($rc) && !empty($rc['data'])) {
             $receipt = save_data_url($rc['data'], receipts_dir(), $oid, ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'application/pdf' => 'pdf'], 1500000);
         }
+        if ($receipt === null && !empty(get_settings()['orders']['requireReceipt']))
+            throw new ApiError(400, 'Please upload your payment receipt (a screenshot from your bank / wallet app). It is required to confirm your order.', 'receipt');
         q_exec('UPDATE orders SET method=?,txn=?,receipt=?,status=? WHERE id=?', [$meth['label'], $txn, $receipt, 'Payment submitted', $oid]);
         add_event($oid, 'Payment submitted', $meth['label'] . ' · ref ' . $txn);
         $dn = (json_decode($r['delivery'], true) ?: [])['name'] ?? '';
         notify('payment', "Payment submitted – $oid", $dn . ' paid ' . (int)$r['total'] . ' ' . CURRENCY . ' via ' . $meth['label'] . " (ref $txn). Please verify.", $oid);
+        queue_alert('submitted', $oid);
         return [200, ['order' => order_out(order_by_id($oid))]];
     }
 
@@ -297,6 +315,7 @@ function handle_api($method, $route, $body)
         q_exec('UPDATE orders SET method=?,txn=?,status=? WHERE id=?', ['Apple Pay', $pid, 'Payment confirmed', $oid]);
         add_event($oid, 'Payment confirmed', "Apple Pay – paid online (ref $pid)");
         notify('payment', "Apple Pay payment received – $oid", ($delivery['name'] ?? '') . ' paid ' . (int)$r['total'] . ' ' . CURRENCY . " by Apple Pay (ref $pid). Already confirmed.", $oid);
+        queue_alert('confirmed', $oid);
         return [200, ['order' => order_out(order_by_id($oid))]];
     }
 
@@ -349,6 +368,8 @@ function handle_api($method, $route, $body)
         q_exec('UPDATE orders SET status=? WHERE id=?', [$new, $oid]);
         sweep_soldout();
         add_event($oid, $new, clean($d['note'] ?? '', 200));
+        log_admin('order.status', "$oid: {$r['status']} -> $new" . (clean($d['note'] ?? '', 80) !== '' ? ' (' . clean($d['note'], 80) . ')' : ''));
+        if ($new === 'Payment confirmed' && $r['status'] !== 'Payment confirmed') queue_alert('confirmed', $oid);   // the order is only CONFIRMED after the payment is verified
         return [200, ['order' => order_out(order_by_id($oid), true)]];
     }
 
@@ -373,6 +394,19 @@ function handle_api($method, $route, $body)
             'chatUnread' => (int)q_val("SELECT COUNT(*) FROM messages WHERE sender='customer' AND seen=0")]];
     }
     if ($R('POST', 'admin/notifications/read')) { q_exec('UPDATE notifications SET `read`=1'); return [200, ['ok' => true]]; }
+    if ($R('POST', 'admin/notifications/delete')) {   // remove unwanted notifications: ?mode = read | all | ids
+        $d = $json(); $mode = str_val($d['mode'] ?? ''); $n = 0;
+        if ($mode === 'read') $n = q_exec('DELETE FROM notifications WHERE `read`=1');
+        elseif ($mode === 'all') $n = q_exec('DELETE FROM notifications');
+        elseif ($mode === 'ids' && is_array($d['ids'] ?? null)) { foreach ($d['ids'] as $i) $n += q_exec('DELETE FROM notifications WHERE id=?', [(int)$i]); }
+        else throw new ApiError(400, 'Choose what to delete.');
+        log_admin('notifications.delete', "$mode: $n removed");
+        return [200, ['ok' => true, 'deleted' => $n]];
+    }
+    if ($R('DELETE', 'admin/notifications/(\d+)')) {
+        q_exec('DELETE FROM notifications WHERE id=?', [(int)$m[1]]);
+        return [200, ['ok' => true]];
+    }
 
     if ($R('GET', 'admin/chats')) {
         $rows = q_all("SELECT u.id,u.name,u.phone,
@@ -400,6 +434,18 @@ function handle_api($method, $route, $body)
         $id = q_insert('INSERT INTO messages(user_id,sender,body,created,seen) VALUES(?,?,?,?,0)', [(int)$cu['id'], 'admin', $text, now()]);
         q_exec("UPDATE messages SET seen=1 WHERE user_id=? AND sender='customer'", [(int)$cu['id']]);
         return [200, ['message' => $one_msg($id)]];
+    }
+
+    if ($R('DELETE', 'admin/chats/(\d+)/messages/(\d+)')) {   // delete one unwanted chat message
+        q_exec('DELETE FROM messages WHERE id=? AND user_id=?', [(int)$m[2], (int)$m[1]]);
+        log_admin('chat.delete', 'Deleted one chat message of customer #' . (int)$m[1]);
+        return [200, ['ok' => true]];
+    }
+    if ($R('DELETE', 'admin/chats/(\d+)')) {                  // clear a whole conversation
+        $n = q_exec('DELETE FROM messages WHERE user_id=?', [(int)$m[1]]);
+        q_exec("DELETE FROM notifications WHERE kind='chat' AND ref=?", [(string)(int)$m[1]]);
+        log_admin('chat.clear', "Cleared the conversation with customer #" . (int)$m[1] . " ($n messages)");
+        return [200, ['ok' => true, 'deleted' => $n]];
     }
 
     if ($R('GET', 'admin/products')) {
@@ -431,26 +477,35 @@ function handle_api($method, $route, $body)
     };
 
     if ($R('POST', 'admin/products/delete-soldout')) {   // one click: permanently remove every item that has no stock
-        return [200, ['ok' => true, 'deleted' => q_exec('DELETE FROM products WHERE stock<=0')]];
+        $n = q_exec('DELETE FROM products WHERE stock<=0');
+        log_admin('product.deleteSoldOut', "$n sold-out item(s) deleted");
+        return [200, ['ok' => true, 'deleted' => $n]];
     }
     if ($R('POST', 'admin/products')) {
         $p = $product_fields($json());
         if (empty($p['name']) || !isset($p['cat']) || !isset($p['price']) || !isset($p['img'])) throw new ApiError(400, 'Name, category, price and photo are required.');
         q_exec('INSERT INTO products(name,cat,price,stock,img,`desc`,active) VALUES(?,?,?,?,?,?,?)',
             [$p['name'], $p['cat'], $p['price'], $p['stock'] ?? 0, $p['img'], $p['desc'] ?? '', $p['active'] ?? 1]);
+        log_admin('product.add', $p['name'] . ' (' . $p['price'] . ' QAR, stock ' . ($p['stock'] ?? 0) . ')');
         return [200, ['ok' => true]];
     }
     if ($R('PUT', 'admin/products/(\d+)')) {
         $row = q_one('SELECT * FROM products WHERE id=?', [(int)$m[1]]);
         if (!$row) throw new ApiError(404, 'Not found');
-        $p = $product_fields($json(), $row);
+        $in = $json();
+        $p = $product_fields($in, $row);
+        $chg = [];
+        foreach (['name', 'cat', 'price', 'stock', 'desc', 'active'] as $f) if (array_key_exists($f, $in) && (string)$row[$f] !== (string)$p[$f]) $chg[] = $f . ': ' . $row[$f] . ' -> ' . $p[$f];
+        if ($chg) log_admin('product.edit', $row['name'] . ' - ' . implode('; ', $chg));
         q_exec('UPDATE products SET name=?,cat=?,price=?,stock=?,img=?,`desc`=?,active=? WHERE id=?',
             [$p['name'], $p['cat'], (int)$p['price'], (int)$p['stock'], $p['img'], $p['desc'], (int)$p['active'], (int)$row['id']]);
         $gone = ((int)$p['stock'] <= 0) ? sweep_soldout() : 0;
         return [200, ['ok' => true, 'autoDeleted' => $gone]];
     }
     if ($R('DELETE', 'admin/products/(\d+)')) {   // permanent: gone from the shop and the admin list (past orders keep their own copy)
+        $pn = q_val('SELECT name FROM products WHERE id=?', [(int)$m[1]]);
         q_exec('DELETE FROM products WHERE id=?', [(int)$m[1]]);
+        log_admin('product.delete', 'Deleted forever: ' . $pn);
         return [200, ['ok' => true]];
     }
 
@@ -463,10 +518,12 @@ function handle_api($method, $route, $body)
         return [200, ['ok' => true]];
     }
 
-    if ($R('GET', 'admin/settings')) return [200, ['settings' => settings_for_admin()]];
+    if ($R('GET', 'admin/settings')) return [200, ['settings' => settings_for_admin(is_owner(current_user()))]];
 
     if ($R('PUT', 'admin/settings')) {
         $d = $json();
+        $isOwner = is_owner(current_user());
+        if (!$isOwner && array_diff(array_keys($d), ['shop'])) throw new ApiError(403, 'Only an owner account can change company, payment and alert settings.');
         $s = get_settings();
         $co = is_array($d['company'] ?? null) ? $d['company'] : []; $sh = is_array($d['shipping'] ?? null) ? $d['shipping'] : []; $pay = is_array($d['payments'] ?? null) ? $d['payments'] : [];
         foreach (['name', 'crNumber', 'address', 'phone', 'email', 'whatsapp'] as $k) if (array_key_exists($k, $co)) $s['company'][$k] = clean($co[$k], 150);
@@ -528,14 +585,58 @@ function handle_api($method, $route, $body)
             unset($a);
         }
         if (array_key_exists('shop', $d)) $s['shop']['autoDeleteSoldOut'] = !empty((is_array($d['shop']) ? $d['shop'] : [])['autoDeleteSoldOut']);
+        if (array_key_exists('orders', $d) && is_array($d['orders'])) {
+            $oi = $d['orders'];
+            if (array_key_exists('requireReceipt', $oi)) $s['orders']['requireReceipt'] = (bool)$oi['requireReceipt'];
+            if (array_key_exists('unpaidHours', $oi)) {
+                if (!is_numeric($oi['unpaidHours']) || $oi['unpaidHours'] < 0 || $oi['unpaidHours'] > 720) throw new ApiError(400, 'Release unpaid orders after 0 to 720 hours (0 = never).');
+                $s['orders']['unpaidHours'] = (int)$oi['unpaidHours'];
+            }
+        }
+        if (array_key_exists('alerts', $d) && is_array($d['alerts'])) {
+            $al = $d['alerts'];
+            $a = &$s['alerts'];
+            if (is_array($al['events'] ?? null)) foreach (['placed', 'submitted', 'confirmed'] as $k) if (array_key_exists($k, $al['events'])) $a['events'][$k] = (bool)$al['events'][$k];
+            $sm = is_array($al['sms'] ?? null) ? $al['sms'] : [];
+            if (array_key_exists('enabled', $sm)) $a['sms']['enabled'] = (bool)$sm['enabled'];
+            if (array_key_exists('provider', $sm)) {
+                if (!in_array($sm['provider'], ['twilio', 'webhook'], true)) throw new ApiError(400, 'Unknown SMS provider.');
+                $a['sms']['provider'] = $sm['provider'];
+            }
+            if (array_key_exists('recipients', $sm)) $a['sms']['recipients'] = parse_recipients($sm['recipients']);
+            foreach (['twilioSid' => 60, 'from' => 40, 'webhookUrl' => 300] as $k => $mx) if (array_key_exists($k, $sm)) $a['sms'][$k] = clean($sm[$k], $mx);
+            if (!empty($sm['twilioToken'])) $a['sms']['twilioToken'] = clean($sm['twilioToken'], 80);   // blank = keep the saved one
+            if ($a['sms']['twilioSid'] !== '' && !preg_match('/^AC[0-9a-fA-F]{32}$/D', $a['sms']['twilioSid'])) throw new ApiError(400, 'Twilio Account SID looks wrong (it starts with AC and has 34 characters).');
+            if ($a['sms']['from'] !== '' && !preg_match('/^(\+\d{8,15}|MG[0-9a-fA-F]{32}|[A-Za-z0-9 ]{1,11})$/D', $a['sms']['from'])) throw new ApiError(400, 'SMS "From" must be your Twilio number (+...), a Messaging Service SID (MG...) or a sender name up to 11 letters.');
+            if ($a['sms']['webhookUrl'] !== '' && !preg_match('#^https://[^\s]+$#D', $a['sms']['webhookUrl'])) throw new ApiError(400, 'The SMS webhook address must start with https://');
+            if (!empty($a['sms']['enabled'])) {
+                $miss = [];
+                if (!$a['sms']['recipients']) $miss[] = 'at least one phone number';
+                if ($a['sms']['provider'] === 'twilio') {
+                    if ($a['sms']['twilioSid'] === '') $miss[] = 'Twilio Account SID';
+                    if ($a['sms']['twilioToken'] === '') $miss[] = 'Twilio Auth Token';
+                    if ($a['sms']['from'] === '') $miss[] = '"From" number';
+                } elseif ($a['sms']['webhookUrl'] === '') $miss[] = 'webhook address';
+                if ($miss) throw new ApiError(400, 'SMS cannot be switched on yet. Still needed: ' . implode(', ', $miss) . '.');
+            }
+            $tg = is_array($al['telegram'] ?? null) ? $al['telegram'] : [];
+            if (array_key_exists('enabled', $tg)) $a['telegram']['enabled'] = (bool)$tg['enabled'];
+            if (array_key_exists('chatId', $tg)) $a['telegram']['chatId'] = clean($tg['chatId'], 60);
+            if (!empty($tg['botToken'])) $a['telegram']['botToken'] = clean($tg['botToken'], 100);
+            if ($a['telegram']['botToken'] !== '' && !preg_match('/^\d{6,}:[A-Za-z0-9_-]{30,}$/D', $a['telegram']['botToken'])) throw new ApiError(400, 'Telegram bot token looks wrong (it looks like 123456789:AA...).');
+            if ($a['telegram']['chatId'] !== '' && !preg_match('/^(-?\d{5,}|@[A-Za-z0-9_]{4,})$/D', $a['telegram']['chatId'])) throw new ApiError(400, 'Telegram chat id must be a number (or @channelname).');
+            if (!empty($a['telegram']['enabled']) && ($a['telegram']['botToken'] === '' || $a['telegram']['chatId'] === '')) throw new ApiError(400, 'Telegram cannot be switched on yet. Still needed: bot token and chat id.');
+            unset($a);
+        }
         if ($pemToWrite !== null) {
             if (!is_dir(dirname(identity_pem()))) @mkdir(dirname(identity_pem()), 0750, true);
             file_put_contents(identity_pem(), $pemToWrite . "\n");
             @chmod(identity_pem(), 0600);
         }
         save_settings($s);
+        log_admin('settings.update', 'Changed: ' . implode(', ', array_keys($d)));
         $swept = sweep_soldout();
-        $out = settings_for_admin();
+        $out = settings_for_admin($isOwner);
         $out['swept'] = $swept;
         return [200, ['settings' => $out]];
     }
@@ -551,6 +652,7 @@ function handle_api($method, $route, $body)
     }
     if ($R('DELETE', 'admin/enquiries/(\d+)')) {   // permanently remove an enquiry (and the contact details in it)
         q_exec('DELETE FROM enquiries WHERE id=?', [(int)$m[1]]);
+        log_admin('enquiry.delete', 'Deleted enquiry #' . (int)$m[1]);
         return [200, ['ok' => true]];
     }
 
@@ -571,10 +673,12 @@ function handle_api($method, $route, $body)
     if ($R('DELETE', 'admin/customers/(\d+)')) {
         // Permanently erase a customer's contact details.  ?orders=keep  -> their past orders stay for your accounts
         //                                                   ?orders=delete -> their orders (and receipts) are erased too
+        need_owner();
         $cid = (int)$m[1];
         $cu = q_one("SELECT id,name FROM users WHERE id=? AND role='customer'", [$cid]);
         if (!$cu) throw new ApiError(404, 'Customer not found');
         $mode = qs('orders', 'keep');
+        log_admin('customer.delete', 'Erased customer ' . $cu['name'] . ' (orders ' . ($mode === 'delete' ? 'deleted' : 'kept') . ')');
         $orders = q_all('SELECT * FROM orders WHERE user_id=?', [$cid]);
         if ($mode === 'delete') {
             foreach ($orders as $o) {
@@ -620,6 +724,142 @@ function handle_api($method, $route, $body)
             'newEnquiries' => $one("SELECT COUNT(*) FROM enquiries WHERE status='New'"),
             'soldOut' => $one('SELECT COUNT(*) FROM products WHERE stock<=0'),
             'lowStock' => $low, 'days' => $days, 'currency' => CURRENCY]];
+    }
+
+    /* ----- admin accounts (owner only) ----- */
+    $active_owners = function () {
+        return (int)q_val("SELECT COUNT(*) FROM users WHERE role='admin' AND (admin_level='owner' OR admin_level IS NULL OR admin_level='') AND (disabled IS NULL OR disabled=0)");
+    };
+    if ($R('GET', 'admin/admins')) {
+        need_owner();
+        $rows = q_all("SELECT id,name,email,admin_level,disabled,created,last_login FROM users WHERE role='admin' ORDER BY id");
+        return [200, ['admins' => array_map(function ($r) {
+            return ['id' => (int)$r['id'], 'name' => $r['name'], 'email' => $r['email'], 'level' => admin_level($r), 'disabled' => !empty($r['disabled']),
+                'created' => (int)$r['created'], 'lastLogin' => $r['last_login'] === null ? null : (int)$r['last_login'],
+                'sessions' => (int)q_val('SELECT COUNT(*) FROM sessions WHERE user_id=? AND expires>?', [(int)$r['id'], now()])];
+        }, $rows)]];
+    }
+    if ($R('POST', 'admin/admins')) {
+        need_owner(); $d = $json();
+        $name = clean($d['name'] ?? '', 80); $email = lower(clean($d['email'] ?? '', 120)); $pw = str_val($d['password'] ?? '');
+        $level = ($d['level'] ?? 'staff') === 'owner' ? 'owner' : 'staff';
+        if (slen($name) < 2 || !valid_email($email)) throw new ApiError(400, 'Enter a name and a valid email for the new admin.');
+        if (strlen($pw) < 8) throw new ApiError(400, 'The password must be at least 8 characters.');
+        if (q_val('SELECT 1 FROM users WHERE email=?', [$email])) throw new ApiError(409, 'This email already has an account (customer or admin). Use a different email.');
+        if ((int)q_val("SELECT COUNT(*) FROM users WHERE role='admin'") >= 10) throw new ApiError(409, 'You can have up to 10 admin accounts.');
+        $id = q_insert("INSERT INTO users(name,email,phone,salt,`hash`,role,created,admin_level,disabled) VALUES(?,?,?,?,?,?,?,?,0)",
+            [$name, $email, 'admin-' . bin2hex(random_bytes(4)), '', hash_new_pw($pw), 'admin', now(), $level]);
+        log_admin('admin.create', "Created $level account: $name <$email>");
+        return [200, ['ok' => true, 'id' => $id]];
+    }
+    if ($R('PUT', 'admin/admins/(\d+)')) {
+        $me = need_owner(); $d = $json(); $id = (int)$m[1];
+        $t = q_one("SELECT * FROM users WHERE id=? AND role='admin'", [$id]);
+        if (!$t) throw new ApiError(404, 'Admin not found');
+        $self = $id === (int)$me['id'];
+        $isOwnerT = admin_level($t) === 'owner';
+        $did = [];
+        if (array_key_exists('name', $d)) {
+            if (slen(clean($d['name'], 80)) < 2) throw new ApiError(400, 'Enter a name.');
+            q_exec('UPDATE users SET name=? WHERE id=?', [clean($d['name'], 80), $id]); $did[] = 'name';
+        }
+        if (array_key_exists('level', $d)) {
+            $lvl = $d['level'] === 'owner' ? 'owner' : 'staff';
+            if ($lvl !== admin_level($t)) {
+                if ($self) throw new ApiError(409, 'You cannot change your own level.');
+                if ($isOwnerT && $active_owners() <= 1) throw new ApiError(409, 'At least one active owner is required.');
+                q_exec('UPDATE users SET admin_level=? WHERE id=?', [$lvl, $id]); $did[] = "level $lvl";
+            }
+        }
+        if (array_key_exists('disabled', $d)) {
+            $dis = $d['disabled'] ? 1 : 0;
+            if ($dis && $self) throw new ApiError(409, 'You cannot disable your own account.');
+            if ($dis && $isOwnerT && $active_owners() <= 1) throw new ApiError(409, 'At least one active owner is required.');
+            q_exec('UPDATE users SET disabled=? WHERE id=?', [$dis, $id]);
+            if ($dis) q_exec('DELETE FROM sessions WHERE user_id=?', [$id]);
+            $did[] = $dis ? 'disabled' : 'enabled';
+        }
+        if (!empty($d['password'])) {
+            if (strlen(str_val($d['password'])) < 8) throw new ApiError(400, 'The password must be at least 8 characters.');
+            q_exec("UPDATE users SET salt='', `hash`=? WHERE id=?", [hash_new_pw(str_val($d['password'])), $id]);
+            if (!$self) q_exec('DELETE FROM sessions WHERE user_id=?', [$id]);
+            $did[] = 'password reset';
+        }
+        log_admin('admin.update', $t['name'] . ' <' . $t['email'] . '>: ' . ($did ? implode(', ', $did) : 'no change'));
+        return [200, ['ok' => true]];
+    }
+    if ($R('DELETE', 'admin/admins/(\d+)')) {
+        $me = need_owner(); $id = (int)$m[1];
+        $t = q_one("SELECT * FROM users WHERE id=? AND role='admin'", [$id]);
+        if (!$t) throw new ApiError(404, 'Admin not found');
+        if ($id === (int)$me['id']) throw new ApiError(409, 'You cannot delete your own account.');
+        if (admin_level($t) === 'owner' && $active_owners() <= 1 && empty($t['disabled'])) throw new ApiError(409, 'At least one active owner is required.');
+        q_exec('DELETE FROM sessions WHERE user_id=?', [$id]);
+        q_exec('DELETE FROM users WHERE id=?', [$id]);
+        log_admin('admin.delete', 'Deleted admin account ' . $t['name'] . ' <' . $t['email'] . '>');
+        return [200, ['ok' => true]];
+    }
+
+    /* ----- admin sign-in sessions ("who is logged in, from where") ----- */
+    $admin_sessions = function () {
+        $me = current_user();
+        $sql = "SELECT s.token, s.user_id, s.ip, s.ua, s.created, s.last_seen, s.expires, u.name, u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE u.role='admin' AND s.expires>?";
+        $p = [now()];
+        if (!is_owner($me)) { $sql .= ' AND s.user_id=?'; $p[] = (int)$me['id']; }
+        return q_all($sql . ' ORDER BY s.last_seen DESC', $p);
+    };
+    if ($R('GET', 'admin/sessions')) {
+        $cur = session_token();
+        return [200, ['sessions' => array_map(function ($r) use ($cur) {
+            return ['sid' => session_sid($r['token']), 'userId' => (int)$r['user_id'], 'name' => $r['name'], 'email' => $r['email'], 'ip' => $r['ip'], 'ua' => $r['ua'],
+                'created' => (int)$r['created'], 'lastSeen' => (int)$r['last_seen'], 'expires' => (int)$r['expires'], 'current' => $r['token'] === $cur];
+        }, $admin_sessions())]];
+    }
+    if ($R('POST', 'admin/sessions/revoke-others')) {   // sign out every other device (owners: every other admin session too)
+        $me = current_user(); $cur = session_token(); $n = 0;
+        foreach ($admin_sessions() as $r) if ($r['token'] !== $cur) $n += q_exec('DELETE FROM sessions WHERE token=?', [$r['token']]);
+        log_admin('session.revokeAll', "Signed out $n other session(s)");
+        return [200, ['ok' => true, 'revoked' => $n]];
+    }
+    if ($R('DELETE', 'admin/sessions/([a-f0-9]{16})')) {
+        $n = 0;
+        foreach ($admin_sessions() as $r) if (session_sid($r['token']) === $m[1]) { $n += q_exec('DELETE FROM sessions WHERE token=?', [$r['token']]); log_admin('session.revoke', 'Signed out ' . $r['name'] . ' (' . $r['ip'] . ')'); }
+        if (!$n) throw new ApiError(404, 'Session not found');
+        return [200, ['ok' => true]];
+    }
+
+    /* ----- access / activity log (owner only) ----- */
+    if ($R('GET', 'admin/log')) {
+        need_owner();
+        $sql = 'SELECT * FROM admin_log WHERE 1=1'; $p = [];
+        if ((int)qs('admin', '0') > 0) { $sql .= ' AND user_id=?'; $p[] = (int)qs('admin'); }
+        $needle = clean(qs('q'), 60);
+        if ($needle !== '') { $sql .= ' AND (action LIKE ? OR detail LIKE ? OR admin_name LIKE ? OR ip LIKE ?)'; $like = '%' . str_replace(['%', '_'], ['', ''], $needle) . '%'; array_push($p, $like, $like, $like, $like); }
+        $rows = q_all($sql . ' ORDER BY id DESC LIMIT 300', $p);
+        return [200, ['log' => array_map(function ($r) { $r['id'] = (int)$r['id']; $r['user_id'] = (int)$r['user_id']; $r['created'] = (int)$r['created']; return $r; }, $rows)]];
+    }
+
+    /* ----- reset test data (owner only) ----- */
+    if ($R('POST', 'admin/reset')) {
+        need_owner(); $d = $json();
+        if (str_val($d['confirm'] ?? '') !== 'RESET') throw new ApiError(400, 'Type the word RESET to confirm.');
+        $o = [];
+        foreach (['orders', 'customers', 'chats', 'enquiries', 'notifications', 'log'] as $k) $o[$k] = !empty($d[$k]);
+        if (!array_filter($o)) throw new ApiError(400, 'Tick at least one thing to reset.');
+        $o['restoreStock'] = !empty($d['restoreStock']);
+        $n = reset_data($o);
+        log_admin('reset', 'Data reset: ' . json_encode($n));
+        return [200, ['ok' => true, 'deleted' => $n]];
+    }
+
+    /* ----- test the order alerts (owner only) ----- */
+    if ($R('POST', 'admin/alerts/test')) {
+        need_owner(); $d = $json();
+        $ch = in_array($d['channel'] ?? '', ['sms', 'telegram'], true) ? $d['channel'] : null;
+        $res = deliver_alert("LOFAN TEST ALERT\nIf you can read this, your order alerts work.\nTime: " . date('d M Y H:i'), $ch);
+        if (!$res) throw new ApiError(400, 'No alert channel is switched on yet. Switch on SMS or Telegram, press Save, then test again.');
+        foreach ($res as $r) log_admin('alert.test', $r[0] . ' to ' . $r[1] . ' - ' . ($r[2] ? 'sent' : 'FAILED ' . $r[3]));
+        return [200, ['results' => array_map(function ($r) { return ['channel' => $r[0], 'to' => $r[1], 'ok' => $r[2], 'detail' => $r[3]]; }, $res)]];
     }
 
     throw new ApiError(404, 'Not found');

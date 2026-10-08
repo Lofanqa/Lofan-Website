@@ -95,6 +95,7 @@ async function stepPay() {
     <div><span class="muted small">Amount to pay</span><strong class="amt">${money(order.total)}</strong></div>
     <div><span class="muted small">Pay to</span><strong>${esc(info.company.name)}</strong>${info.company.crNumber ? `<small class="muted"> CR ${esc(info.company.crNumber)}</small>` : ''}</div>
   </div>
+  <p class="gate-note">Your items are reserved for you. <strong>Your order is confirmed only after your payment is verified.</strong></p>
   <form id="payForm" class="co-grid" novalidate>
     <div class="co-col">
       <h3>1. Choose how to pay</h3>
@@ -123,7 +124,7 @@ async function stepPay() {
       <h3>2. Confirm your payment</h3>
       <p class="muted small">After sending the money, enter the transaction number shown on your bank / Ooredoo Money receipt so we can verify it quickly.</p>
       <label>Transaction / reference number<input name="txn" placeholder="e.g. FT26279XXXXX" required></label>
-      <label>Upload receipt screenshot (optional – image or PDF, max 1.4 MB)<input type="file" name="receipt" accept="image/*,.pdf"></label>
+      <label>Upload your payment receipt ${info.requireReceipt ? '<b class="req">(required)</b>' : '(optional)'} – a screenshot or PDF from your bank / wallet app, max 1.4 MB<input type="file" name="receipt" accept="image/*,.pdf"></label>
       <button class="btn full" type="submit">I have paid – Submit <b>&rarr;</b></button>
       <p class="note" id="payNote"></p>
       <p class="muted small center"><button type="button" class="ulink" id="cancelOrder">Cancel this order</button></p>
@@ -149,6 +150,7 @@ async function stepPay() {
     note.className = 'note';
     if (v.txn.trim().length < 4) return fail(note, 'Please enter the transaction / reference number.');
     let receipt = null; const file = f.elements.receipt.files[0];
+    if (!file && info.requireReceipt) return fail(note, 'Please upload your payment receipt (a screenshot from your bank or wallet app). It is required to confirm your order.');
     if (file) {
       if (file.size > 1_400_000) return fail(note, 'Receipt is too large (max 1.4 MB).');
       receipt = { name: file.name, data: await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); }) };
@@ -197,7 +199,8 @@ function stepDone() {
     <h3>Thank you, ${esc(order.delivery.name)}!</h3>
     ${order.status === 'Payment confirmed'
       ? `<p>Your payment for order <strong>${order.id}</strong> (<strong>${money(order.total)}</strong> via ${esc(order.method || '')}) was received and <strong>confirmed</strong>. We are getting your order ready.</p>`
-      : `<p>Your payment for order <strong>${order.id}</strong> (<strong>${money(order.total)}</strong> via ${esc(order.method || '')}) has been submitted. Our team has been notified and will verify it shortly.</p>`}
+      : `<p>We received the payment details for order <strong>${order.id}</strong> (<strong>${money(order.total)}</strong> via ${esc(order.method || '')}).</p>
+         <p><strong>Your order is not confirmed yet.</strong> It becomes confirmed as soon as our team verifies the payment (usually within a few hours). You will see the status change in My Orders.</p>`}
     <p class="muted small">You can follow every step of your order in <strong>My Account &rarr; My Orders</strong>.</p>
     <div class="done-btns"><a class="btn" href="account.html#orders">Track My Order</a><a class="btn ghost" href="index.html#shop">Continue Shopping</a></div></div>`;
 }

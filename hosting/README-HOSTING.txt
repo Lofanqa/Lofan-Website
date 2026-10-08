@@ -72,10 +72,107 @@ STEP 7  Share it
   Colours / fonts ............................ css/style.css
 
   Best workflow: edit on your PC (VS Code) -> run  Build-Hosting-Zip.bat  (or: python build_hosting_package.py)
-  -> upload dist/lofan-cpanel.zip -> Extract and choose "overwrite".  This NEVER touches your database, your uploaded
-  product photos in images/products, or private/ (customers, orders, receipts) because those are not in the zip
-  except the default product photos. If you added photos in Admin, they stay on the server.
+  -> upload dist/lofan-update.zip -> Extract and choose "overwrite".  (see "UPDATING THE LIVE SITE" just below.)
   IMPORTANT: do NOT delete the folder  private  on the server and do NOT re-run install.php.
+
+
+================= UPDATING THE LIVE SITE (the database already exists) =================
+
+  The build makes TWO zips in the dist folder:
+     lofan-cpanel.zip  = FIRST install only (it contains the installer).
+     lofan-update.zip  = every later update. It has NO installer, NO database, NO private/config.php and NO secrets.
+  Steps (about 2 minutes):
+     1. On your PC: double-click Build-Hosting-Zip.bat  -> wait for "DONE".
+     2. cPanel > File Manager > public_html > Upload > dist/lofan-update.zip.
+     3. Right-click the zip > Extract (into public_html) > if asked, overwrite existing files > then delete the zip.
+     4. Open the website once and press Ctrl+F5.  Done.
+  What is kept: customers, orders, chats, products, prices, stock, settings, admin accounts, payment receipts, the photos
+  you uploaded in Admin, your bank details, SMS / Telegram keys. They live in the MySQL database and in the private folder,
+  and the update zip never contains them.
+  New database fields are added automatically the first time the new version runs (no data is lost, nothing to click).
+  Your product photos from Admin are in images/products; the update zip only adds the default photos, so yours stay.
+  Rolling back: re-upload the previous update zip (keep one copy of each version on your PC).
+  Tip: take a backup before a big update (cPanel > Backup, or phpMyAdmin > Export).
+  Alternative with GitHub: Part 3 below (Publish-To-GitHub.bat, then "Deploy HEAD Commit" in cPanel).
+
+
+================= RESET THE TEST DATA (before you start selling) =================
+
+  You made test customers and test orders in the live database. To clear them:
+     Admin > Security > scroll down to "Reset test data"
+     tick what to delete (Orders + receipts, Customers, Chat messages, Enquiries, Notifications, the activity log),
+     tick "Put the items of deleted orders back into stock", type  RESET  and press "Delete the selected data".
+  It NEVER deletes your products, prices, categories, company / bank / alert settings or admin accounts.
+  Only an Owner admin can do this. It is written to the activity log (unless you tick "this activity log" as well).
+  To remove only ONE test customer: Admin > Customers > Delete customer (choose whether to delete their orders too).
+  Do this once, right before you announce the website. Never do it later by mistake: real orders would be deleted too.
+
+
+================= HOW AN ORDER IS CONFIRMED (payment authentication) =================
+
+  An order is only CONFIRMED after the payment is verified:
+     Awaiting payment  -> the customer sees "Not confirmed - awaiting payment" and a Complete Payment button.
+     Payment submitted -> the customer sent the transaction number and a receipt (screenshot). You get a pop-up, an
+                          SMS / Telegram alert and the order shows in Orders with the receipt.
+     Payment confirmed -> YOU press "Confirm payment" after checking your bank / Fawran / Ooredoo statement. Only now the
+                          customer sees "Order confirmed".  (Apple Pay / card payments confirm by themselves.)
+     Then: Preparing > Out for delivery > Delivered.   Cancelled orders put the items back in stock.
+  Rules you can change in Admin > Company & Payments > "Order rules":
+     - Customers must upload a payment receipt (default ON).
+     - Unpaid orders are released after N hours (default 24): the order is cancelled, the stock is returned and the customer
+       is told "Not paid within N hours". Set 0 to never release.
+
+  Which Qatar bank / payment method is free?  Bank transfer to your IBAN, Fawran (instant bank transfer) and Ooredoo Money
+  cost the customer and you nothing extra from this website; you confirm each payment yourself (steps above).
+  Fully automatic CARD payment (customer pays on a card page, order confirms by itself) needs a payment gateway / merchant
+  account from a Qatar bank or a provider - that always has fees and a sign-up with documents. Ask your bank which gateway
+  they offer for online shops in Qatar; once you pick one, the website can be connected to it (a small change in
+  psp_charge() in hosting/private/lib.php). Keep the gateway's secret keys private: enter them only in Admin or on the server,
+  never in a chat, e-mail or GitHub.  Fees and approval rules differ per bank - confirm them with the bank before you decide.
+
+
+================= ADMIN ACCOUNTS, SIGN-INS AND ACTIVITY LOG =================
+
+  Admin > Security (Owner):
+     - Admin accounts: up to 10. Level OWNER = everything. Level STAFF = orders, chat, products, enquiries, customers,
+       but NOT payment settings, alert settings, admin accounts, the activity log, resetting data or erasing customers.
+       Add / disable / delete an admin, change the level, reset a password. You cannot delete, disable or demote yourself,
+       and at least one active Owner must always exist.
+     - Who is signed in: every admin sign-in (device, IP address, time, last active) with "Sign out" for each one and
+       "Sign out all other devices". Staff sign-ins expire after 7 days. Changing a password signs out the other devices.
+     - Access & activity log: every sign-in, failed / blocked sign-in and important change (order status, products,
+       settings, deletions, resets, SMS sent...) with admin name, time, IP and device. Search, filter by admin, Export CSV.
+  Admin passwords are stored encrypted (bcrypt). After 10 wrong attempts within 10 minutes the sign-in pauses for a few
+  minutes (and the attempt is logged).
+  Give each person their own account (for example chairman = Owner, two staff). Never share one password.
+
+
+================= ORDER ALERTS TO YOUR PHONE (SMS / Telegram) =================
+
+  Admin > Company & Payments > "Order alerts to your phone".  Each alert contains: order number, customer name and phone,
+  the items (2x name), total, date and time, and the delivery location (Google Maps link or address).
+  Choose WHEN to send:  order placed (not paid yet) / payment submitted / order confirmed (default: the last two).
+  Phone numbers: one per line, e.g.  +97466809657  (up to 5).
+
+  SMS needs an SMS provider (a website cannot send SMS by itself):
+     1. Create an account at https://www.twilio.com (or another provider) and add a little prepaid balance.
+     2. Copy the Account SID (starts with AC) and the Auth Token. Buy / register a sender: a Twilio phone number,
+        a Messaging Service (MG...), or an alphanumeric sender name.  NOTE: some Qatar networks only accept registered
+        sender names - ask the provider; if SMS does not arrive, check the provider's message log.
+     3. In Admin paste SID, token, sender, tick "Send SMS alerts", Save, then press "Send test SMS".
+     Another provider? Choose "Other provider (webhook address)": the website sends the message as JSON to the https address.
+  Telegram is FREE and needs no provider: in Telegram open @BotFather > /newbot > copy the token; open your new bot and press
+  Start; find your chat id with @userinfobot; paste token + chat id in Admin, tick "Send Telegram alerts", Save, "Send test".
+  The tokens are stored on the server only, never shown again and never put into the zip or GitHub.
+  Alerts are sent after the customer already got their answer, so a failing SMS provider never blocks an order.
+  Every alert (sent or failed, with the reason) appears in the activity log.
+
+
+================= PHONE VIEW =================
+
+  All pages (shop, cart, payment, My Account, admin) adapt automatically to phones and tablets: bigger touch buttons,
+  two-column shop grid, pop-ups that slide up from the bottom, a vertical order-tracking timeline, and admin tables that
+  turn into cards. Nothing to set up. Test it: in Chrome press F12 > the phone icon, or just open lofan.qa on your phone.
 
 
 ================= PART 3 – EASY EDITING: VS Code -> GitHub -> cPanel (recommended) =================
@@ -138,6 +235,14 @@ STEP 7  Share it
      -> see README.txt (Google Client ID and Apple Pay setup). Add https://lofan.qa as an authorised JavaScript origin in Google.
   Customer location "share" does nothing
      -> it needs https:// (padlock). Run AutoSSL (step 5).
+  SMS does not arrive
+     -> Admin > Security > Access & activity log: the line "SMS alert" says why it failed (wrong SID / token, no balance,
+        sender not allowed for Qatar). Press "Send test SMS" in Company & Payments to see the provider's answer. Check the
+        provider's own message log too. Telegram alerts are a free way to confirm the alert system itself works.
+  After an update the page looks old
+     -> press Ctrl+F5 (phone: close the tab and open it again). CSS / JS are cached by the browser for a short time.
+  "Reset test data" button is grey
+     -> type  RESET  (capital letters) in the box first.
 
 BACKUPS  (do this weekly)
   cPanel > "Backup" > download a Full Backup, or at least:  phpMyAdmin > your database > Export (SQL)  AND download the

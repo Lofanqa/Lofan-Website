@@ -21,7 +21,16 @@ class ApiError extends Exception
 }
 
 function priv_dir() { return __DIR__; }
-function root_dir() { return dirname(__DIR__); }
+function root_dir()
+{
+    static $r = null;
+    if ($r === null) {
+        $r = dirname(__DIR__);
+        $f = __DIR__ . '/config.php';
+        if (is_file($f)) { $c = require $f; if (is_array($c) && !empty($c['root'])) $r = $c['root']; }   // local test server serves the project folder itself
+    }
+    return $r;
+}
 function receipts_dir() { return __DIR__ . '/receipts'; }
 function identity_pem() { return __DIR__ . '/applepay/identity.pem'; }
 function product_img_dir() { return root_dir() . '/images/products'; }
@@ -86,8 +95,11 @@ function schema_statements($driver)
     return [
         "CREATE TABLE IF NOT EXISTS users(id $pk, name VARCHAR(120), email VARCHAR(190) UNIQUE, phone VARCHAR(40) UNIQUE,
             address VARCHAR(400) DEFAULT '', salt VARCHAR(64), `hash` VARCHAR(255), role VARCHAR(20) DEFAULT 'customer', created BIGINT,
-            google_sub VARCHAR(100), lat DOUBLE, lng DOUBLE, loc_at BIGINT)$tail",
-        "CREATE TABLE IF NOT EXISTS sessions(token VARCHAR(100) PRIMARY KEY, user_id INT, expires BIGINT" . $k('s_user (user_id)') . ")$tail",
+            google_sub VARCHAR(100), lat DOUBLE, lng DOUBLE, loc_at BIGINT, admin_level VARCHAR(10), disabled INT DEFAULT 0, last_login BIGINT)$tail",
+        "CREATE TABLE IF NOT EXISTS sessions(token VARCHAR(100) PRIMARY KEY, user_id INT, expires BIGINT, ip VARCHAR(64), ua VARCHAR(255),
+            created BIGINT, last_seen BIGINT" . $k('s_user (user_id)') . ")$tail",
+        "CREATE TABLE IF NOT EXISTS admin_log(id $pk, user_id INT, admin_name VARCHAR(120), action VARCHAR(60), detail VARCHAR(600), ip VARCHAR(64),
+            ua VARCHAR(255), created BIGINT" . $k('l_created (created)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS categories(`key` VARCHAR(100) PRIMARY KEY, label VARCHAR(200), sort INT DEFAULT 0)$tail",
         "CREATE TABLE IF NOT EXISTS products(id $pk, name VARCHAR(200), cat VARCHAR(100), price INT, stock INT, img VARCHAR(300),
             `desc` VARCHAR(600) DEFAULT '', active INT DEFAULT 1)$tail",
@@ -102,13 +114,46 @@ function schema_statements($driver)
     ];
 }
 
-function install_schema()
+const SCHEMA_VERSION = 2;
+
+function exec_schema()
 {
     $driver = cfg()['driver'] ?? 'mysql';
     foreach (schema_statements($driver) as $sql) {
         if ($driver === 'sqlite') $sql = str_replace('MEDIUMTEXT', 'TEXT', $sql);
         db()->exec($sql);
     }
+}
+function set_schema_version($v)
+{
+    if (q_val("SELECT 1 FROM settings WHERE `key`='schema_version'")) q_exec("UPDATE settings SET value=? WHERE `key`='schema_version'", [(string)$v]);
+    else q_exec("INSERT INTO settings(`key`, value) VALUES('schema_version', ?)", [(string)$v]);
+}
+function install_schema() { exec_schema(); set_schema_version(SCHEMA_VERSION); }
+
+function column_exists($table, $col)
+{
+    if ((cfg()['driver'] ?? 'mysql') === 'sqlite') {
+        foreach (q_all("PRAGMA table_info($table)") as $r) if ($r['name'] === $col) return true;
+        return false;
+    }
+    return (int)q_val('SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?', [$table, $col]) > 0;
+}
+/* Upgrades an existing database after you upload a newer version of the website. Runs once, automatically; your data is kept. */
+function migrate()
+{
+    $row = q_one("SELECT value FROM settings WHERE `key`='schema_version'");
+    if ($row && (int)$row['value'] >= SCHEMA_VERSION) return;
+    exec_schema();                                                     // creates any new tables
+    $add = [['users', 'admin_level', 'VARCHAR(10)'], ['users', 'disabled', 'INT DEFAULT 0'], ['users', 'last_login', 'BIGINT'],
+        ['sessions', 'ip', 'VARCHAR(64)'], ['sessions', 'ua', 'VARCHAR(255)'], ['sessions', 'created', 'BIGINT'], ['sessions', 'last_seen', 'BIGINT']];
+    foreach ($add as $a) {
+        if (!column_exists($a[0], $a[1])) {
+            try { db()->exec("ALTER TABLE {$a[0]} ADD COLUMN {$a[1]} {$a[2]}"); } catch (Throwable $e) { /* another request did it first */ }
+        }
+    }
+    q_exec("UPDATE users SET admin_level='owner' WHERE role='admin' AND (admin_level IS NULL OR admin_level='')");   // existing admin becomes the owner
+    set_schema_version(SCHEMA_VERSION);
 }
 
 /* ------------------------------------------------------------------ default settings & seed data */
@@ -120,6 +165,13 @@ function default_settings()
         'shipping' => ['fee' => 25, 'freeFrom' => 300],
         'google' => ['clientId' => ''],
         'shop' => ['autoDeleteSoldOut' => false],
+        // an order is only CONFIRMED after the payment is verified; unpaid orders are released after unpaidHours (0 = never)
+        'orders' => ['requireReceipt' => true, 'unpaidHours' => 24],
+        'alerts' => [
+            'events' => ['placed' => false, 'submitted' => true, 'confirmed' => true],
+            'sms' => ['enabled' => false, 'provider' => 'twilio', 'recipients' => ['+97466809657'], 'twilioSid' => '', 'twilioToken' => '', 'from' => '', 'webhookUrl' => ''],
+            'telegram' => ['enabled' => false, 'botToken' => '', 'chatId' => ''],
+        ],
         'applepay' => ['enabled' => false, 'merchantId' => '', 'displayName' => 'Lofan', 'domain' => '', 'sandbox' => true,
             'publicKey' => '', 'secretKey' => '', 'domainFile' => ''],
         'payments' => [
@@ -281,24 +333,34 @@ function current_user()
     static $loaded = false, $user = null;
     if ($loaded) return $user;
     $loaded = true;
-    $tok = $_COOKIE['lofan_session'] ?? '';
-    if ($tok !== '' && preg_match('/^[A-Za-z0-9_-]+$/D', $tok)) {
-        $user = q_one('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?', [$tok, now()]);
+    $tok = session_token();
+    if ($tok !== '') {
+        $user = q_one('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND (u.disabled IS NULL OR u.disabled=0)', [$tok, now()]);
+        if ($user) q_exec('UPDATE sessions SET last_seen=? WHERE token=? AND (last_seen IS NULL OR last_seen<?)', [now(), $tok, now() - 60]);
     }
     return $user;
 }
+function session_token()
+{
+    $t = $_COOKIE['lofan_session'] ?? '';
+    return (is_string($t) && preg_match('/^[A-Za-z0-9_-]+$/D', $t)) ? $t : '';
+}
+function session_sid($token) { return substr(hash('sha256', $token), 0, 16); }   // public id of a session (the real token stays secret)
 function need_user() { $u = current_user(); if (!$u) throw new ApiError(401, 'Please sign in first'); return $u; }
 function need_admin() { $u = need_user(); if ($u['role'] !== 'admin') throw new ApiError(403, 'Admin access only'); return $u; }
 function set_session_cookie($value, $expires)
 {
     setcookie('lofan_session', $value, ['expires' => $expires, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax', 'secure' => is_https()]);
 }
-function start_session($userId)
+function start_session($userId, $admin = false)
 {
     $tok = random_token();
+    $ttl = $admin ? 7 * 86400 : 30 * 86400;                           // staff sign-ins expire sooner than customers'
     q_exec('DELETE FROM sessions WHERE expires<?', [now()]);
-    q_exec('INSERT INTO sessions(token,user_id,expires) VALUES(?,?,?)', [$tok, (int)$userId, now() + 30 * 86400]);
-    set_session_cookie($tok, now() + 30 * 86400);
+    q_exec('INSERT INTO sessions(token,user_id,expires,ip,ua,created,last_seen) VALUES(?,?,?,?,?,?,?)',
+        [$tok, (int)$userId, now() + $ttl, client_ip(), slice(str_val($_SERVER['HTTP_USER_AGENT'] ?? ''), 250), now(), now()]);
+    q_exec('UPDATE users SET last_login=? WHERE id=?', [now(), (int)$userId]);
+    set_session_cookie($tok, now() + $ttl);
 }
 
 /* ------------------------------------------------------------------ output shaping */
@@ -306,7 +368,8 @@ function public_user($u)
 {
     $loc = ($u['lat'] !== null && $u['lng'] !== null) ? ['lat' => (float)$u['lat'], 'lng' => (float)$u['lng'], 'at' => (int)$u['loc_at']] : null;
     return ['id' => (int)$u['id'], 'name' => $u['name'], 'email' => $u['email'], 'phone' => $u['phone'] ?: '', 'address' => $u['address'] ?: '',
-        'role' => $u['role'], 'google' => !empty($u['google_sub']), 'hasPassword' => !empty($u['hash']), 'location' => $loc];
+        'role' => $u['role'], 'google' => !empty($u['google_sub']), 'hasPassword' => !empty($u['hash']), 'location' => $loc,
+        'adminLevel' => $u['role'] === 'admin' ? ((($u['admin_level'] ?? '') ?: 'owner')) : null];
 }
 function user_by_id($id) { return q_one('SELECT * FROM users WHERE id=?', [(int)$id]); }
 function save_user_loc($uid, $loc) { q_exec('UPDATE users SET lat=?,lng=?,loc_at=? WHERE id=?', [$loc[0], $loc[1], now(), (int)$uid]); }
@@ -393,10 +456,15 @@ function applepay_missing($ap, $hasIdentity = null)
     if (empty($ap['domainFile'])) $need[] = 'Domain verification file';
     return $need;
 }
-function settings_for_admin()
+function settings_for_admin($owner = true)
 {
     $raw = get_settings();
+    if (!$owner) return ['company' => $raw['company'], 'shop' => $raw['shop'], 'shipping' => $raw['shipping']];   // staff never see payment / secret settings
     $out = $raw;
+    $out['alerts']['sms']['hasToken'] = !empty($raw['alerts']['sms']['twilioToken']);
+    $out['alerts']['sms']['twilioToken'] = '';
+    $out['alerts']['telegram']['hasToken'] = !empty($raw['alerts']['telegram']['botToken']);
+    $out['alerts']['telegram']['botToken'] = '';
     $out['applepay']['hasSecret'] = !empty($raw['applepay']['secretKey']);
     $out['applepay']['secretKey'] = '';                             // never send secrets back to the browser
     $out['applepay']['hasIdentity'] = is_file(identity_pem());
@@ -434,7 +502,7 @@ function payment_info()
             'hint' => 'Pay securely with Face ID / Touch ID using a card in your Apple Wallet. Your order is confirmed instantly.',
             'details' => [], 'applepay' => ['displayName' => $ap['displayName'] ?: 'Lofan', 'countryCode' => 'QA', 'currencyCode' => CURRENCY]];
     }
-    return ['company' => $s['company'], 'currency' => CURRENCY, 'methods' => $methods];
+    return ['company' => $s['company'], 'currency' => CURRENCY, 'methods' => $methods, 'requireReceipt' => !empty($s['orders']['requireReceipt'])];
 }
 
 function http_json($url, $payload = null, $headers = [], $opts = [], $timeout = 20)

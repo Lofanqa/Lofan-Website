@@ -51,13 +51,17 @@ function start() {
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab); });
   $('#logout').addEventListener('click', logout);
+  $('#who').textContent = `${state.user.name} · ${isOwner() ? 'Owner' : 'Staff'}`;
+  $('[data-tab=settings]').hidden = !isOwner();          // company, payments and alert settings are for owners only
   poll(true); setInterval(poll, 5000);
-  showTab(location.hash.slice(1) || 'overview');
+  const first = location.hash.slice(1);
+  showTab(first === 'settings' && !isOwner() ? 'overview' : (first || 'overview'));
 }
+const isOwner = () => state.user && state.user.adminLevel === 'owner';
 function showTab(t) {
   tab = t; history.replaceState(null, '', '#' + t);
   $$('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
-  ({ overview: renderOverview, orders: renderOrders, notifs: renderNotifs, chats: renderChats, products: renderProducts, enquiries: renderEnquiries, customers: renderCustomers, settings: renderSettings }[t] || renderOverview)();
+  ({ overview: renderOverview, orders: renderOrders, notifs: renderNotifs, chats: renderChats, products: renderProducts, enquiries: renderEnquiries, customers: renderCustomers, settings: renderSettings, security: renderSecurity }[t] || renderOverview)();
 }
 const panel = html => { $('#panel').innerHTML = html; };
 
@@ -118,10 +122,22 @@ async function updateOrderBadge() {
 
 async function renderNotifs() {
   const d = await api('/admin/notifications?after=0');
-  panel(`<div class="adm-save"><div><strong>${d.unread ? d.unread + ' unread' : 'All caught up'}</strong><p class="muted small">New orders, payment submissions and enquiries appear here and pop up instantly while this page is open.</p></div>
-    <button class="btn ghost" id="markRead">Mark all as read</button></div>
-    ${d.recent.length ? d.recent.map(n => `<div class="ord ${n.read ? '' : 'unread'}"><div class="ord-top"><strong>${esc(n.title)}</strong><small class="muted">${fmtDate(n.created)}</small></div><p class="small">${esc(n.body)}</p></div>`).join('') : '<p class="muted">No notifications yet.</p>'}`);
+  panel(`<div class="adm-save"><div><strong>${d.unread ? d.unread + ' unread' : 'All caught up'}</strong><p class="muted small">New orders, payment submissions and enquiries appear here and pop up instantly while this page is open. Remove the ones you don't need.</p></div>
+    <div class="adm-btns"><button class="btn ghost" id="markRead">Mark all as read</button>
+      <button class="btn ghost danger-text" id="delRead">Delete read</button><button class="btn danger" id="delAll">Delete all</button></div></div>
+    ${d.recent.length ? d.recent.map(n => `<div class="ord ${n.read ? '' : 'unread'}"><div class="ord-top"><strong>${esc(n.title)}</strong>
+      <span class="ord-right"><small class="muted">${fmtDate(n.created)}</small><button class="rm danger-text" data-delnotif="${n.id}" title="Delete this notification">Delete</button></span></div><p class="small">${esc(n.body)}</p></div>`).join('') : '<p class="muted">No notifications.</p>'}`);
   $('#markRead').addEventListener('click', async () => { await api('/admin/notifications/read', { method: 'POST' }); poll(); renderNotifs(); });
+  const bulk = (mode, text) => async () => {
+    if (!confirm(text)) return;
+    const r = await api('/admin/notifications/delete', { method: 'POST', body: { mode } }); toast(`${r.deleted} notification(s) deleted`); poll(); renderNotifs();
+  };
+  $('#delRead').addEventListener('click', bulk('read', 'Delete all notifications you have already read?'));
+  $('#delAll').addEventListener('click', bulk('all', 'Delete ALL notifications? This cannot be undone.'));
+  $('#panel').onclick = async e => {
+    const id = e.target.dataset.delnotif; if (!id) return;
+    await api('/admin/notifications/' + id, { method: 'DELETE' }); poll(); renderNotifs();
+  };
 }
 
 /* ---------- overview (dashboard summary) ---------- */
@@ -270,7 +286,7 @@ async function renderProducts() {
     <h3>Current items</h3>
     <div class="adm-filter"><input id="prodSearch" type="search" placeholder="Search items…"><select id="prodMode"><option value="">All items</option><option value="low">Running low (5 or fewer)</option><option value="out">Sold out</option></select></div>
     <div class="adm-table">
-      <div class="adm-row head"><span></span><span>Item</span><span>Category</span><span>Price (QAR)</span><span>Stock</span><span>Shop</span></div>
+      <div class="adm-row prod head"><span></span><span>Item</span><span>Category</span><span>Price (QAR)</span><span>Stock</span><span>Shop</span></div>
       <div id="prodRows"></div>
     </div>`);
   const drawHead = () => {
@@ -281,11 +297,11 @@ async function renderProducts() {
   const drawRows = () => {
     const q = f.q.toLowerCase();
     const list = products.filter(p => (!q || (p.name + ' ' + (d.categories[p.cat] || '')).toLowerCase().includes(q)) && (!f.mode || (f.mode === 'out' ? p.stock <= 0 : p.stock > 0 && p.stock <= 5)));
-    $('#prodRows').innerHTML = list.length ? list.map(p => `<div class="adm-row ${p.stock <= 0 ? 'soldrow' : ''}" data-id="${p.id}">
-        <img src="${esc(p.img)}" alt=""><span><strong>${esc(p.name)}</strong><small>${esc(p.desc || '')}</small>${p.stock <= 0 ? '<em class="sold-tag">Sold out</em>' : p.stock <= 5 ? '<em class="low-tag">Low stock</em>' : ''}</span><span>${esc(d.categories[p.cat] || p.cat)}</span>
-        <input type="number" min="0" data-f="price" value="${p.price}">
-        <input type="number" min="0" data-f="stock" value="${p.stock}" class="${p.stock === 0 ? 'zero' : ''}">
-        <span class="vis"><input type="checkbox" data-f="active" ${p.active ? 'checked' : ''} title="Show in the shop"><button class="rm danger-text" data-del="${p.id}">Delete forever</button></span></div>`).join('')
+    $('#prodRows').innerHTML = list.length ? list.map(p => `<div class="adm-row prod ${p.stock <= 0 ? 'soldrow' : ''}" data-id="${p.id}">
+        <img src="${esc(p.img)}" alt=""><span><strong>${esc(p.name)}</strong><small>${esc(p.desc || '')}</small>${p.stock <= 0 ? '<em class="sold-tag">Sold out</em>' : p.stock <= 5 ? '<em class="low-tag">Low stock</em>' : ''}</span><span class="pcat">${esc(d.categories[p.cat] || p.cat)}</span>
+        <label class="pf"><em>Price (QAR)</em><input type="number" min="0" data-f="price" value="${p.price}"></label>
+        <label class="pf"><em>Stock</em><input type="number" min="0" data-f="stock" value="${p.stock}" class="${p.stock === 0 ? 'zero' : ''}"></label>
+        <span class="vis"><input type="checkbox" data-f="active" ${p.active ? 'checked' : ''} title="Show in the shop"><em class="vtxt">Show in shop</em><button class="rm danger-text" data-del="${p.id}">Delete forever</button></span></div>`).join('')
       : '<p class="muted" style="padding:16px 0">No items match.</p>';
     drawHead();
   };
@@ -375,7 +391,7 @@ function customerCard(c) {
       <div class="ord-contact">
         <button class="btn ghost" data-chat="${c.id}">Chat on website</button>
         ${c.phone ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(c.phone, `Hello ${c.name}, this is Lofan.`)}">WhatsApp</a>` : ''}
-        <button class="btn ghost danger-text" data-delcust="${c.id}">Delete customer</button>
+        ${isOwner() ? `<button class="btn ghost danger-text" data-delcust="${c.id}">Delete customer</button>` : ''}
       </div>
     </article>`;
 }
@@ -424,9 +440,10 @@ function confirmDeleteCustomer(c) {
 /* ---------- chat with customers (website chat + WhatsApp) ---------- */
 const waLink = (phone, text) => `https://wa.me/${String(phone).replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
 let chatUid = null, chatLast = 0;
+const msgX = m => `<button class="msg-x" data-delmsg="${m.id}" title="Delete this message" aria-label="Delete this message">&times;</button>`;
 const bubble = m => m.loc
-  ? `<div class="msg ${m.sender === 'admin' ? 'me' : 'them'} loc"><p>📍 Shared location</p><a href="${mapsLink(m.loc.lat, m.loc.lng)}" target="_blank" rel="noopener">Open in Google Maps</a> <a class="btn small" href="${dirLink(m.loc.lat, m.loc.lng)}" target="_blank" rel="noopener">Get directions</a><small>${fmtDate(m.created)}</small></div>`
-  : `<div class="msg ${m.sender === 'admin' ? 'me' : 'them'}"><p>${esc(m.body)}</p><small>${fmtDate(m.created)}</small></div>`;
+  ? `<div class="msg ${m.sender === 'admin' ? 'me' : 'them'} loc" data-mid="${m.id}">${msgX(m)}<p>📍 Shared location</p><a href="${mapsLink(m.loc.lat, m.loc.lng)}" target="_blank" rel="noopener">Open in Google Maps</a> <a class="btn small" href="${dirLink(m.loc.lat, m.loc.lng)}" target="_blank" rel="noopener">Get directions</a><small>${fmtDate(m.created)}</small></div>`
+  : `<div class="msg ${m.sender === 'admin' ? 'me' : 'them'}" data-mid="${m.id}">${msgX(m)}<p>${esc(m.body)}</p><small>${fmtDate(m.created)}</small></div>`;
 async function renderChats() {
   const { threads } = await api('/admin/chats');
   panel(`<div class="chat-admin">
@@ -440,7 +457,7 @@ function drawThreads(threads) {
   const el = $('#threadList'); if (!el) return;
   el.innerHTML = threads.length ? threads.map(t => `<button class="thread ${t.id === chatUid ? 'on' : ''}" data-uid="${t.id}">
       <strong>${esc(t.name)}</strong>${t.unread ? `<b class="badge">${t.unread}</b>` : ''}
-      <small>${esc((t.last || '').slice(0, 60))}</small></button>`).join('') : '<p class="muted small">No conversations yet.</p>';
+      <small>${/^\[loc:/.test(t.last || '') ? '📍 Shared location' : esc((t.last || '').slice(0, 60))}</small></button>`).join('') : '<p class="muted small">No conversations yet.</p>';
 }
 async function openThread(uid) {
   chatUid = uid; chatLast = 0;
@@ -450,11 +467,20 @@ async function openThread(uid) {
     if (!$('#chatPane')) { await renderChats(); return; }
     $('#chatPane').innerHTML = `
       <div class="chat-head"><div><strong>${esc(c.name)}</strong><small class="muted"> ${c.phone ? '+' + esc(c.phone) : ''} ${esc(c.email)}</small></div>
-        <span class="chat-head-btns">${c.lat != null ? `<a class="btn ghost" target="_blank" rel="noopener" href="${dirLink(c.lat, c.lng)}">📍 Directions</a>` : ''}${c.phone ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(c.phone, `Hello ${c.name}, this is Lofan.`)}">Open WhatsApp</a>` : ''}</span></div>
+        <span class="chat-head-btns">${c.lat != null ? `<a class="btn ghost" target="_blank" rel="noopener" href="${dirLink(c.lat, c.lng)}">📍 Directions</a>` : ''}${c.phone ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(c.phone, `Hello ${c.name}, this is Lofan.`)}">Open WhatsApp</a>` : ''}<button class="btn ghost danger-text" data-clearchat="${c.id}">Clear chat</button></span></div>
       <div class="chat-body" id="adminChatBody">${d.messages.length ? d.messages.map(bubble).join('') : '<p class="chat-empty">No messages yet. Say hello below.</p>'}</div>
       <form id="adminChatForm"><input id="adminChatInput" placeholder="Reply to ${esc(c.name.split(' ')[0])}…" autocomplete="off" maxlength="1000"><button class="btn" type="submit">Send</button></form>`;
     if (d.messages.length) chatLast = d.messages[d.messages.length - 1].id;
     const body = $('#adminChatBody'); body.scrollTop = body.scrollHeight;
+    $('#chatPane').onclick = async e => {                 // delete one message, or clear the whole conversation
+      const one = e.target.closest('[data-delmsg]'), all = e.target.closest('[data-clearchat]');
+      try {
+        if (one) { await api(`/admin/chats/${uid}/messages/${one.dataset.delmsg}`, { method: 'DELETE' }); one.closest('.msg').remove(); poll(); }
+        if (all && confirm('Delete the whole conversation with this customer? This cannot be undone.')) {
+          await api(`/admin/chats/${uid}`, { method: 'DELETE' }); toast('Conversation cleared'); chatUid = null; poll(); renderChats();
+        }
+      } catch (err) { toast(err.message); }
+    };
     $('#adminChatForm').onsubmit = async e => {
       e.preventDefault();
       const input = $('#adminChatInput'), text = input.value.trim(); if (!text) return;
@@ -483,6 +509,7 @@ setInterval(() => { if (tab === 'chats' && !document.hidden) refreshChat(); }, 4
 
 /* ---------- company & payment settings (Qatar) ---------- */
 async function renderSettings() {
+  if (!isOwner()) { panel('<p class="muted">Only owner accounts can change company, payment and alert settings.</p>'); return; }
   const { settings: s } = await api('/admin/settings');
   const c = s.company, ib = s.payments.iban, fw = s.payments.fawran, oo = s.payments.ooredoo, sh = s.shipping;
   const v = x => esc(x ?? '');
@@ -559,17 +586,48 @@ async function renderSettings() {
       <label>Free delivery from (order subtotal)<input type="number" min="0" name="shipping.freeFrom" value="${sh.freeFrom}"></label>
     </div>
 
-    <div class="set-bar"><button class="btn" type="submit">Save Settings</button><p class="note" id="setNote"></p></div>
-  </form>
+    <h3>Order rules – confirming payments</h3>
+    ${(() => {
+      const o = s.orders || {};
+      return `<p class="muted small">An order only becomes <strong>CONFIRMED</strong> after you have verified its payment (Orders → Confirm payment). Until then the customer sees "awaiting payment" and the items are only reserved.</p>
+      <label class="chk"><input type="checkbox" name="orders.requireReceipt" ${o.requireReceipt !== false ? 'checked' : ''}> Customers must upload a payment receipt (screenshot) when they submit a bank / Fawran / Ooredoo payment</label>
+      <div class="set-grid"><label>Release unpaid orders after (hours – 0 = never)<input type="number" min="0" max="720" name="orders.unpaidHours" value="${o.unpaidHours ?? 24}"></label></div>`;
+    })()}
 
-  <form id="adminPw" class="set-pw" novalidate>
-    <h3>Admin account</h3>
-    <p class="muted small">Signed in as <strong>${esc(state.user.name)}</strong> (${esc(state.user.email)})</p>
-    <div class="set-grid">
-      <label>Current password<input type="password" name="current" autocomplete="current-password"></label>
-      <label>New password (min. 8 characters)<input type="password" name="new" autocomplete="new-password"></label>
-    </div>
-    <button class="btn ghost" type="submit">Change admin password</button><p class="note" id="pwNote"></p>
+    <h3>Order alerts to your phone</h3>
+    ${(() => {
+      const al = s.alerts || {}, ev = al.events || {}, sm = al.sms || {}, tg = al.telegram || {};
+      return `<p class="muted small">Get a message on your phone for every order: item names, customer name, time and location link.</p>
+      <p class="small"><strong>Send alert when:</strong></p>
+      <label class="chk"><input type="checkbox" name="alerts.events.placed" ${ev.placed ? 'checked' : ''}> a customer places an order (not paid yet)</label>
+      <label class="chk"><input type="checkbox" name="alerts.events.submitted" ${ev.submitted !== false ? 'checked' : ''}> a customer submits their payment (you need to verify it)</label>
+      <label class="chk"><input type="checkbox" name="alerts.events.confirmed" ${ev.confirmed !== false ? 'checked' : ''}> an order is confirmed (payment verified / Apple Pay paid)</label>
+
+      <h4>SMS</h4>
+      <div class="set-warn">SMS is sent by an SMS provider, so you need an account with one (for example <strong>Twilio</strong>) and a small prepaid balance. Qatar numbers may also need a registered sender name – ask the provider. Fill the fields below, tick "Send SMS", Save, then press "Send test SMS".</div>
+      <label class="chk"><input type="checkbox" name="alerts.sms.enabled" ${sm.enabled ? 'checked' : ''}> Send SMS alerts</label>
+      <div class="set-grid">
+        <label>Phone numbers to alert (one per line, up to 5)<textarea name="alerts.sms.recipients" rows="3" placeholder="+97466809657">${v((sm.recipients || []).join('\n'))}</textarea></label>
+        <label>SMS provider<select name="alerts.sms.provider"><option value="twilio" ${sm.provider !== 'webhook' ? 'selected' : ''}>Twilio</option><option value="webhook" ${sm.provider === 'webhook' ? 'selected' : ''}>Other provider (webhook address)</option></select></label>
+        <label>Twilio Account SID<input name="alerts.sms.twilioSid" value="${v(sm.twilioSid)}" placeholder="AC…"></label>
+        <label>Twilio Auth Token<input type="password" name="alerts.sms.twilioToken" autocomplete="new-password" placeholder="${sm.hasToken ? 'Saved – leave blank to keep' : ''}"></label>
+        <label>Send from (Twilio number +…, Messaging Service SID MG…, or a sender name)<input name="alerts.sms.from" value="${v(sm.from)}" placeholder="+1…"></label>
+        <label>Webhook address (only for "Other provider", https://…)<input name="alerts.sms.webhookUrl" value="${v(sm.webhookUrl)}" placeholder="https://…"></label>
+      </div>
+      <button type="button" class="btn ghost" data-test="sms">Send test SMS</button>
+
+      <h4>Telegram (free)</h4>
+      <p class="muted small">A free alternative that needs no SMS provider: create a bot with @BotFather in Telegram, copy its token, send the bot a message, and use your chat id (e.g. from @userinfobot).</p>
+      <label class="chk"><input type="checkbox" name="alerts.telegram.enabled" ${tg.enabled ? 'checked' : ''}> Send Telegram alerts</label>
+      <div class="set-grid">
+        <label>Bot token<input type="password" name="alerts.telegram.botToken" autocomplete="new-password" placeholder="${tg.hasToken ? 'Saved – leave blank to keep' : '123456789:AA…'}"></label>
+        <label>Chat id<input name="alerts.telegram.chatId" value="${v(tg.chatId)}" placeholder="123456789"></label>
+      </div>
+      <button type="button" class="btn ghost" data-test="telegram">Send test Telegram</button>
+      <p class="note" id="testNote"></p>`;
+    })()}
+
+    <div class="set-bar"><button class="btn" type="submit">Save Settings</button><p class="note" id="setNote"></p></div>
   </form>`);
 
   const hint = () => {
@@ -591,9 +649,161 @@ async function renderSettings() {
     try { await api('/admin/settings', { method: 'PUT', body }); note.textContent = 'Saved. Customers will see these details immediately.'; $('#setWarn').hidden = ibanOk($('#ibanInput').value); toast('Settings saved'); }
     catch (err) { note.textContent = err.message; note.classList.add('err'); }
   });
+  $('#setForm').addEventListener('click', async e => {   // "Send test SMS / Telegram" (uses the settings you saved)
+    const b = e.target.closest('[data-test]'); if (!b) return;
+    const note = $('#testNote'); note.className = 'note'; note.textContent = 'Sending…'; b.disabled = true;
+    try {
+      const r = await api('/admin/alerts/test', { method: 'POST', body: { channel: b.dataset.test } });
+      note.innerHTML = r.results.map(x => `${x.ok ? '✓ Sent' : '✗ Failed'} – ${esc(x.channel)} to ${esc(x.to)}${x.ok ? '' : ': ' + esc(x.detail || 'unknown error')}`).join('<br>');
+      if (r.results.some(x => !x.ok)) note.classList.add('err');
+    } catch (err) { note.textContent = err.message; note.classList.add('err'); }
+    b.disabled = false;
+  });
+}
+
+/* ---------- security: sessions, admin accounts, access log, reset ---------- */
+const deviceName = ua => {
+  ua = ua || '';
+  const b = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  const o = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iPhone / iPad' : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+  return b + (o ? ' on ' + o : '');
+};
+const ACTION_LABEL = {
+  login: 'Signed in', login_failed: 'Failed sign-in', login_blocked: 'Blocked sign-in', logout: 'Signed out', 'admin.setup': 'First admin created',
+  'admin.create': 'Admin created', 'admin.update': 'Admin changed', 'admin.delete': 'Admin deleted', 'password.change': 'Password changed',
+  'order.status': 'Order status', 'product.add': 'Product added', 'product.edit': 'Product edited', 'product.delete': 'Product deleted', 'product.deleteSoldOut': 'Sold-out items deleted',
+  'settings.update': 'Settings changed', 'customer.delete': 'Customer erased', 'enquiry.delete': 'Enquiry deleted', 'notifications.delete': 'Notifications deleted',
+  'chat.delete': 'Chat message deleted', 'chat.clear': 'Chat cleared', reset: 'DATA RESET', 'session.revoke': 'Session signed out', 'session.revokeAll': 'Sessions signed out',
+  'alert.sms': 'SMS alert', 'alert.telegram': 'Telegram alert', 'alert.test': 'Alert test'
+};
+async function renderSecurity() {
+  const owner = isOwner();
+  const [ss, ad, lg] = await Promise.all([api('/admin/sessions'), owner ? api('/admin/admins') : null, owner ? api('/admin/log') : null]);
+  const sessions = ss.sessions;
+  panel(`
+    <h3>Who is signed in</h3>
+    <p class="muted small">${owner ? 'Every admin sign-in on this website.' : 'Your sign-ins.'} Staff sign-ins expire after 7 days. If you do not recognise one, press "Sign out".</p>
+    <div class="adm-table sess">
+      <div class="adm-row head sess-row"><span>Who</span><span>Device</span><span>Location (IP)</span><span>Signed in</span><span>Last active</span><span></span></div>
+      ${sessions.map(s => `<div class="adm-row sess-row"><span><strong>${esc(s.name)}</strong><small>${esc(s.email)}</small></span><span>${esc(deviceName(s.ua))}</span><span>${esc(s.ip || '')}</span><span>${fmtDate(s.created)}</span><span>${fmtDate(s.lastSeen)}</span>
+        <span>${s.current ? '<em class="sold-tag" style="background:#d8e2c4;color:#3d5028">This device</em>' : `<button class="rm danger-text" data-revoke="${s.sid}">Sign out</button>`}</span></div>`).join('')}
+    </div>
+    ${sessions.length > 1 ? '<button class="btn ghost danger-text" id="revokeOthers" style="margin-top:12px">Sign out all other devices</button>' : ''}
+
+    ${owner ? `
+    <h3>Admin accounts <small class="muted">(${ad.admins.length} of 10)</small></h3>
+    <p class="muted small"><strong>Owner</strong> can do everything. <strong>Staff</strong> can handle orders, chat, products, enquiries and customers, but cannot see payment settings, manage admins, erase customers, or read this log.</p>
+    <div class="adm-table accts">
+      <div class="adm-row head adm-acc"><span>Name</span><span>Level</span><span>Status</span><span>Last sign-in</span><span></span></div>
+      ${ad.admins.map(a => `<div class="adm-row adm-acc ${a.disabled ? 'soldrow' : ''}" data-aid="${a.id}">
+        <span><strong>${esc(a.name)}</strong><small>${esc(a.email)}</small></span>
+        <span><select data-alevel ${a.id === state.user.id ? 'disabled' : ''}><option value="owner" ${a.level === 'owner' ? 'selected' : ''}>Owner</option><option value="staff" ${a.level === 'staff' ? 'selected' : ''}>Staff</option></select></span>
+        <span>${a.disabled ? '<em class="sold-tag">Disabled</em>' : a.sessions ? `<em class="sold-tag" style="background:#d8e2c4;color:#3d5028">${a.sessions} signed in</em>` : 'Active'}</span>
+        <span>${a.lastLogin ? fmtDate(a.lastLogin) : 'Never'}</span>
+        <span class="acc-btns"><button class="rm" data-areset="${a.id}">Reset password</button>
+          ${a.id === state.user.id ? '<em class="muted small">(you)</em>' : `<button class="rm" data-atoggle="${a.id}" data-dis="${a.disabled ? 0 : 1}">${a.disabled ? 'Enable' : 'Disable'}</button><button class="rm danger-text" data-adel="${a.id}">Delete</button>`}</span></div>`).join('')}
+    </div>
+    <h4>Add an admin account</h4>
+    <form id="addAdmin" class="adm-add" novalidate>
+      <label>Name<input name="name" required placeholder="e.g. Sales manager"></label>
+      <label>Email<input name="email" type="email" required></label>
+      <label>Password (min. 8)<input name="password" type="password" autocomplete="new-password" required></label>
+      <label>Level<select name="level"><option value="staff">Staff</option><option value="owner">Owner</option></select></label>
+      <button class="btn" type="submit">Add admin</button>
+    </form>
+    <p class="note" id="addAdminNote"></p>` : ''}
+
+    <h3>My password</h3>
+    <form id="adminPw" class="set-pw" novalidate>
+      <div class="set-grid">
+        <label>Current password<input type="password" name="current" autocomplete="current-password"></label>
+        <label>New password (min. 8 characters)<input type="password" name="new" autocomplete="new-password"></label>
+      </div>
+      <button class="btn ghost" type="submit">Change my password</button><p class="note" id="pwNote"></p>
+    </form>
+
+    ${owner ? `
+    <h3>Access &amp; activity log</h3>
+    <p class="muted small">Every sign-in, failed sign-in and important change made by the admins and the system (last 300).</p>
+    <div class="adm-filter"><input id="logSearch" type="search" placeholder="Search (name, action, IP, order no.…)">
+      <select id="logAdmin"><option value="0">All admins</option>${ad.admins.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>
+      <button class="btn ghost" id="logCsv">Export CSV</button></div>
+    <div class="adm-table logt" id="logTable"></div>
+
+    <h3>Reset test data</h3>
+    <div class="set-warn"><strong>Careful – this permanently deletes data.</strong> Use it to clear test customers and test orders before you start selling. Your products, prices, categories, settings and admin accounts are <strong>never</strong> touched.</div>
+    <form id="resetForm" novalidate>
+      <label class="chk"><input type="checkbox" name="orders" checked> Orders (and uploaded payment receipts)</label>
+      <label class="chk"><input type="checkbox" name="customers" checked> Customers and their accounts</label>
+      <label class="chk"><input type="checkbox" name="chats" checked> Chat messages</label>
+      <label class="chk"><input type="checkbox" name="enquiries" checked> Enquiries</label>
+      <label class="chk"><input type="checkbox" name="notifications" checked> Notifications</label>
+      <label class="chk"><input type="checkbox" name="log"> This activity log</label>
+      <label class="chk"><input type="checkbox" name="restoreStock" checked> Put the items of deleted orders back into stock</label>
+      <label>Type <strong>RESET</strong> to confirm<input id="resetConfirm" autocomplete="off" placeholder="RESET"></label>
+      <button class="btn danger" id="resetBtn" type="submit" disabled>Delete the selected data</button><p class="note" id="resetNote"></p>
+    </form>` : ''}`);
+
+  $('#panel').onclick = async e => {
+    const t = e.target;
+    try {
+      if (t.dataset.revoke) { await api('/admin/sessions/' + t.dataset.revoke, { method: 'DELETE' }); toast('Signed out'); renderSecurity(); }
+      if (t.id === 'revokeOthers' && confirm('Sign out every other device?')) { const r = await api('/admin/sessions/revoke-others', { method: 'POST', body: {} }); toast(`${r.revoked} session(s) signed out`); renderSecurity(); }
+      if (t.dataset.atoggle) { await api('/admin/admins/' + t.dataset.atoggle, { method: 'PUT', body: { disabled: t.dataset.dis === '1' } }); toast('Updated'); renderSecurity(); }
+      if (t.dataset.adel && confirm('Delete this admin account permanently?')) { await api('/admin/admins/' + t.dataset.adel, { method: 'DELETE' }); toast('Admin deleted'); renderSecurity(); }
+      if (t.dataset.areset) askNewPassword(+t.dataset.areset);
+    } catch (err) { toast(err.message); }
+  };
+  $('#panel').onchange = async e => {
+    if (!e.target.matches('[data-alevel]')) return;
+    try { await api('/admin/admins/' + e.target.closest('[data-aid]').dataset.aid, { method: 'PUT', body: { level: e.target.value } }); toast('Level changed'); renderSecurity(); }
+    catch (err) { toast(err.message); renderSecurity(); }
+  };
   $('#adminPw').addEventListener('submit', async e => {
     e.preventDefault(); const note = $('#pwNote'); note.className = 'note';
-    try { await api('/me/password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); e.target.reset(); note.textContent = 'Password updated.'; }
+    try { await api('/me/password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); e.target.reset(); note.textContent = 'Password updated. Your other devices were signed out.'; }
+    catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+  if (!owner) return;
+
+  $('#addAdmin').addEventListener('submit', async e => {
+    e.preventDefault(); const note = $('#addAdminNote'); note.className = 'note';
+    try { await api('/admin/admins', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); toast('Admin account created'); renderSecurity(); }
+    catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+
+  let logRows = lg.log;
+  const drawLog = () => {
+    $('#logTable').innerHTML = `<div class="adm-row head log-row"><span>When</span><span>Admin</span><span>What</span><span>Details</span><span>IP / device</span></div>` +
+      (logRows.length ? logRows.map(r => `<div class="adm-row log-row ${/failed|blocked|RESET|reset/i.test(r.action) ? 'soldrow' : ''}"><span>${fmtDate(r.created)}</span><span>${esc(r.admin_name)}</span>
+        <span><strong>${esc(ACTION_LABEL[r.action] || r.action)}</strong></span><span>${esc(r.detail)}</span><span>${esc(r.ip || '')}<small>${esc(deviceName(r.ua))}</small></span></div>`).join('') : '<p class="muted" style="padding:14px 0">Nothing logged yet.</p>');
+  };
+  drawLog();
+  let tmr;
+  const reloadLog = () => { clearTimeout(tmr); tmr = setTimeout(async () => { logRows = (await api(`/admin/log?q=${encodeURIComponent($('#logSearch').value)}&admin=${$('#logAdmin').value}`)).log; drawLog(); }, 250); };
+  $('#logSearch').addEventListener('input', reloadLog); $('#logAdmin').addEventListener('change', reloadLog);
+  $('#logCsv').addEventListener('click', e => { e.preventDefault(); downloadFile('lofan-activity-log.csv', csvText([['When', 'Admin', 'Action', 'Details', 'IP', 'Device']].concat(logRows.map(r => [new Date(r.created * 1000).toLocaleString(), r.admin_name, r.action, r.detail, r.ip, deviceName(r.ua)])))); });
+
+  $('#resetConfirm').addEventListener('input', e => { $('#resetBtn').disabled = e.target.value.trim() !== 'RESET'; });
+  $('#resetForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target, body = { confirm: $('#resetConfirm').value.trim() }, note = $('#resetNote'); note.className = 'note';
+    ['orders', 'customers', 'chats', 'enquiries', 'notifications', 'log', 'restoreStock'].forEach(k => { body[k] = f.elements[k].checked; });
+    if (!confirm('Last chance: permanently delete the selected data?')) return;
+    try {
+      const r = await api('/admin/reset', { method: 'POST', body });
+      note.textContent = 'Done – deleted: ' + Object.entries(r.deleted).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ') + '.'; toast('Data reset'); poll();
+      $('#resetConfirm').value = ''; $('#resetBtn').disabled = true;
+    } catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+}
+function askNewPassword(id) {
+  Modal.open(`<h2>Reset <em>password</em></h2><p class="gate-note">Choose a new password for this admin (min. 8 characters). They will be signed out everywhere.</p>
+    <form id="newPwForm" novalidate><label>New password<input name="password" type="password" autocomplete="new-password" required></label>
+    <button class="btn full" type="submit">Set password</button><p class="note" data-note></p></form>`);
+  $('#newPwForm').addEventListener('submit', async e => {
+    e.preventDefault(); const note = $('[data-note]', e.target);
+    try { await api('/admin/admins/' + id, { method: 'PUT', body: { password: e.target.elements.password.value } }); Modal.close(); toast('Password changed'); renderSecurity(); }
     catch (err) { note.textContent = err.message; note.classList.add('err'); }
   });
 }

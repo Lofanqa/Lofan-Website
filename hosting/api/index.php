@@ -6,6 +6,7 @@ error_reporting(E_ALL);
 require __DIR__ . '/../private/lib.php';
 ini_set('log_errors', '1');
 ini_set('error_log', priv_dir() . '/error.log');
+require __DIR__ . '/../private/extras.php';
 require __DIR__ . '/../private/routes.php';
 
 function send_json($code, $obj)
@@ -39,8 +40,12 @@ if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 8000000) { send_json(413, ['error' 
 $body = file_get_contents('php://input');
 
 $pdo = null;
+$GLOBALS['ALERT_QUEUE'] = [];
+$GLOBALS['LOG_ALWAYS'] = [];
 try {
     $pdo = db();
+    migrate();            // upgrades the database automatically after you upload a newer version (your data is kept)
+    expire_unpaid();      // releases orders that were never paid
     if ($method !== 'GET') $pdo->beginTransaction();
     $res = handle_api($method, $route, $body);
     if ($pdo->inTransaction()) $pdo->commit();
@@ -55,9 +60,25 @@ try {
     }
 } catch (ApiError $e) {
     if ($pdo && $pdo->inTransaction()) $pdo->rollBack();
+    $GLOBALS['ALERT_QUEUE'] = [];           // nothing was saved, so nothing to announce
     send_json($e->getCode() ?: 400, $e->field ? ['error' => $e->getMessage(), 'field' => $e->field] : ['error' => $e->getMessage()]);
 } catch (Throwable $e) {
     if ($pdo && $pdo->inTransaction()) { try { $pdo->rollBack(); } catch (Throwable $x) { /* ignore */ } }
+    $GLOBALS['ALERT_QUEUE'] = [];
     error_log('API error on ' . $method . ' /' . $route . ': ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
     send_json(500, ['error' => 'Server error']);
+}
+
+/* After the answer is on its way to the visitor: send SMS / Telegram alerts and keep failed-sign-in log entries.
+   (The customer never waits for the SMS provider.) */
+if (!empty($GLOBALS['ALERT_QUEUE']) || !empty($GLOBALS['LOG_ALWAYS'])) {
+    if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+    elseif (function_exists('litespeed_finish_request')) litespeed_finish_request();
+    else { while (ob_get_level() > 0) @ob_end_flush(); @flush(); }
+    try {
+        flush_always_logs();
+        send_queued_alerts();
+    } catch (Throwable $e) {
+        error_log('post-response tasks failed: ' . $e->getMessage());
+    }
 }

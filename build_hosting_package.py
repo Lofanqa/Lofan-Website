@@ -34,10 +34,12 @@ DEFAULT_SEED = {
 
 def export_seed():
     """Shop content from the local database. Secrets (Apple Pay keys, Google id) are removed."""
-    if not os.path.isfile(DB):
+    DEVDB = os.path.join(ROOT, 'data', 'dev.sqlite')
+    db = DEVDB if os.path.isfile(DEVDB) else DB            # the PHP test database wins over the old Python one
+    if not os.path.isfile(db):
         print('  (no local database found – using the default shop items)')
         return DEFAULT_SEED
-    c = sqlite3.connect('file:' + DB.replace('\\', '/') + '?mode=ro', uri=True)
+    c = sqlite3.connect('file:' + db.replace('\\', '/') + '?mode=ro', uri=True)
     c.row_factory = sqlite3.Row
     rows = lambda sql: [dict(r) for r in c.execute(sql)]
     seed = {'categories': rows('SELECT key,label,sort FROM categories ORDER BY sort'),
@@ -48,6 +50,9 @@ def export_seed():
         ap = st.get('applepay', {})
         st['applepay'] = {**ap, 'enabled': False, 'secretKey': '', 'publicKey': '', 'domainFile': '', 'merchantId': '', 'domain': ''}
         st['google'] = {'clientId': ''}
+        al = st.get('alerts') or {}                                   # never export SMS / Telegram secrets
+        if isinstance(al.get('sms'), dict): al['sms']['twilioToken'] = ''
+        if isinstance(al.get('telegram'), dict): al['telegram']['botToken'] = ''
         seed['settings'] = st
     if FULL:
         for t in ('users', 'orders', 'order_events', 'messages', 'notifications', 'enquiries'):
@@ -91,7 +96,8 @@ def stage():
             shutil.copy2(src, STAGE)
     os.makedirs(os.path.join(STAGE, 'images', 'products'), exist_ok=True)
     shutil.copy2(os.path.join(HOSTING, 'images-products.htaccess'), os.path.join(STAGE, 'images', 'products', '.htaccess'))
-    for d in ('receipts', 'applepay', 'throttle'):          # empty folders the server writes to
+    for d in ('receipts', 'applepay', 'throttle'):          # empty folders the server writes to (never ship local test files)
+        shutil.rmtree(os.path.join(STAGE, 'private', d), ignore_errors=True)
         os.makedirs(os.path.join(STAGE, 'private', d), exist_ok=True)
         open(os.path.join(STAGE, 'private', d, 'index.html'), 'w').close()
     with open(os.path.join(STAGE, 'private', 'seed.json'), 'w', encoding='utf-8') as f:
@@ -111,6 +117,27 @@ def make_zip():
             for f in sorted(files):
                 full = os.path.join(base, f)
                 z.write(full, os.path.relpath(full, STAGE).replace('\\', '/'))
+                n += 1
+    return n
+
+
+UPDATE_ZIP = os.path.join(DIST, 'lofan-update.zip')
+UPDATE_SKIP = {'install.php', 'private/seed.json', 'README-HOSTING.txt'}
+
+
+def make_update_zip():
+    """For a site that is already installed: same files, but no installer / seed data. Safe to extract over the live site."""
+    if os.path.exists(UPDATE_ZIP):
+        os.remove(UPDATE_ZIP)
+    n = 0
+    with zipfile.ZipFile(UPDATE_ZIP, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for base, dirs, files in os.walk(STAGE):
+            for f in sorted(files):
+                full = os.path.join(base, f)
+                rel = os.path.relpath(full, STAGE).replace('\\', '/')
+                if rel in UPDATE_SKIP:
+                    continue
+                z.write(full, rel)
                 n += 1
     return n
 
@@ -143,6 +170,8 @@ if __name__ == '__main__':
     stage()
     n = make_zip()
     mb = os.path.getsize(ZIP) / 1024 / 1024
-    print(f'\n  DONE  ->  {ZIP}\n  {n} files, {mb:.2f} MB\n  Upload it in cPanel > File Manager > public_html > Upload, then Extract. See hosting/README-HOSTING.txt.\n')
+    n2 = make_update_zip()
+    print(f'\n  DONE\n  FIRST INSTALL ->  {ZIP}   ({n} files, {mb:.2f} MB)\n  UPDATE ONLY   ->  {UPDATE_ZIP}   ({n2} files, {os.path.getsize(UPDATE_ZIP) / 1024 / 1024:.2f} MB)'
+          '\n  Already installed?  Upload lofan-update.zip in cPanel > File Manager > public_html and Extract (overwrite).  Your database, customers and orders are kept.\n')
     if PREVIEW:
         preview()
