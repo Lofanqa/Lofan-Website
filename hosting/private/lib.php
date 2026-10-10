@@ -114,7 +114,7 @@ function schema_statements($driver)
     ];
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function exec_schema()
 {
@@ -153,6 +153,14 @@ function migrate()
         }
     }
     q_exec("UPDATE users SET admin_level='owner' WHERE role='admin' AND (admin_level IS NULL OR admin_level='')");   // existing admin becomes the owner
+    $st = q_one("SELECT value FROM settings WHERE `key`='settings'");   // SMS / Twilio alerts were replaced by WhatsApp: forget the old keys
+    if ($st) {
+        $j = json_decode($st['value'], true);
+        if (is_array($j) && isset($j['alerts']['sms'])) {
+            unset($j['alerts']['sms']);
+            q_exec("UPDATE settings SET value=? WHERE `key`='settings'", [json_encode($j, JSON_UNESCAPED_UNICODE)]);
+        }
+    }
     set_schema_version(SCHEMA_VERSION);
 }
 
@@ -168,8 +176,9 @@ function default_settings()
         // an order is only CONFIRMED after the payment is verified; unpaid orders are released after unpaidHours (0 = never)
         'orders' => ['requireReceipt' => true, 'unpaidHours' => 24],
         'alerts' => [
-            'events' => ['placed' => false, 'submitted' => true, 'confirmed' => true],
-            'sms' => ['enabled' => false, 'provider' => 'twilio', 'recipients' => ['+97466809657'], 'twilioSid' => '', 'twilioToken' => '', 'from' => '', 'webhookUrl' => ''],
+            'events' => ['placed' => true, 'submitted' => true, 'confirmed' => true],
+            // number '' = use the company WhatsApp number (Company details). provider: callmebot (free, personal WhatsApp) or webhook
+            'whatsapp' => ['enabled' => false, 'provider' => 'callmebot', 'number' => '', 'apiKey' => '', 'webhookUrl' => ''],
             'telegram' => ['enabled' => false, 'botToken' => '', 'chatId' => ''],
         ],
         'applepay' => ['enabled' => false, 'merchantId' => '', 'displayName' => 'Lofan', 'domain' => '', 'sandbox' => true,
@@ -461,8 +470,10 @@ function settings_for_admin($owner = true)
     $raw = get_settings();
     if (!$owner) return ['company' => $raw['company'], 'shop' => $raw['shop'], 'shipping' => $raw['shipping']];   // staff never see payment / secret settings
     $out = $raw;
-    $out['alerts']['sms']['hasToken'] = !empty($raw['alerts']['sms']['twilioToken']);
-    $out['alerts']['sms']['twilioToken'] = '';
+    unset($out['alerts']['sms']);
+    $out['alerts']['whatsapp']['hasKey'] = !empty($raw['alerts']['whatsapp']['apiKey']);
+    $out['alerts']['whatsapp']['apiKey'] = '';
+    $out['alerts']['whatsapp']['target'] = whatsapp_target($raw);                  // who really receives the alerts (shown in Admin)
     $out['alerts']['telegram']['hasToken'] = !empty($raw['alerts']['telegram']['botToken']);
     $out['alerts']['telegram']['botToken'] = '';
     $out['applepay']['hasSecret'] = !empty($raw['applepay']['secretKey']);

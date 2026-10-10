@@ -87,7 +87,7 @@ STEP 7  Share it
      3. Right-click the zip > Extract (into public_html) > if asked, overwrite existing files > then delete the zip.
      4. Open the website once and press Ctrl+F5.  Done.
   What is kept: customers, orders, chats, products, prices, stock, settings, admin accounts, payment receipts, the photos
-  you uploaded in Admin, your bank details, SMS / Telegram keys. They live in the MySQL database and in the private folder,
+  you uploaded in Admin, your bank details, WhatsApp / Telegram keys. They live in the MySQL database and in the private folder,
   and the update zip never contains them.
   New database fields are added automatically the first time the new version runs (no data is lost, nothing to click).
   Your product photos from Admin are in images/products; the update zip only adds the default photos, so yours stay.
@@ -113,7 +113,7 @@ STEP 7  Share it
   An order is only CONFIRMED after the payment is verified:
      Awaiting payment  -> the customer sees "Not confirmed - awaiting payment" and a Complete Payment button.
      Payment submitted -> the customer sent the transaction number and a receipt (screenshot). You get a pop-up, an
-                          SMS / Telegram alert and the order shows in Orders with the receipt.
+                          WhatsApp / Telegram alert and the order shows in Orders with the receipt.
      Payment confirmed -> YOU press "Confirm payment" after checking your bank / Fawran / Ooredoo statement. Only now the
                           customer sees "Order confirmed".  (Apple Pay / card payments confirm by themselves.)
      Then: Preparing > Out for delivery > Delivered.   Cancelled orders put the items back in stock.
@@ -141,30 +141,42 @@ STEP 7  Share it
      - Who is signed in: every admin sign-in (device, IP address, time, last active) with "Sign out" for each one and
        "Sign out all other devices". Staff sign-ins expire after 7 days. Changing a password signs out the other devices.
      - Access & activity log: every sign-in, failed / blocked sign-in and important change (order status, products,
-       settings, deletions, resets, SMS sent...) with admin name, time, IP and device. Search, filter by admin, Export CSV.
+       settings, deletions, resets, WhatsApp alerts sent...) with admin name, time, IP and device. Search, filter by admin, Export CSV.
   Admin passwords are stored encrypted (bcrypt). After 10 wrong attempts within 10 minutes the sign-in pauses for a few
   minutes (and the attempt is logged).
   Give each person their own account (for example chairman = Owner, two staff). Never share one password.
 
 
-================= ORDER ALERTS TO YOUR PHONE (SMS / Telegram) =================
+================= ORDER ALERTS ON YOUR WHATSAPP =================
 
-  Admin > Company & Payments > "Order alerts to your phone".  Each alert contains: order number, customer name and phone,
-  the items (2x name), total, date and time, and the delivery location (Google Maps link or address).
-  Choose WHEN to send:  order placed (not paid yet) / payment submitted / order confirmed (default: the last two).
-  Phone numbers: one per line, e.g.  +97466809657  (up to 5).
+  (SMS / Twilio alerts were removed. Alerts now go to your WhatsApp.)
+  Admin > Company & Payments > "Order alerts to your phone".  Every alert contains: order number, date and time,
+  each item with its price, delivery fee, total, the customer's name, phone and address, and a Google Maps link when the
+  customer shared their location.  Example:
+        NEW ORDER - waiting for payment
+        Order: LF-AB12CD     Time: 10 Oct 2026, 11:40
+        Items:  • 2 x Olive Leaf Napkin - 90 QAR (45 each)   • 1 x Embroidered Charger Mat - 95 QAR
+        Delivery: 10 QAR     Total: 195 QAR
+        Customer: Sara Ali, +97455551234, Address: Zone 61, Street 12, West Bay, Doha
+  Choose WHEN to send:  order placed (not paid yet) / payment submitted / order confirmed (all three are on by default).
 
-  SMS needs an SMS provider (a website cannot send SMS by itself):
-     1. Create an account at https://www.twilio.com (or another provider) and add a little prepaid balance.
-     2. Copy the Account SID (starts with AC) and the Auth Token. Buy / register a sender: a Twilio phone number,
-        a Messaging Service (MG...), or an alphanumeric sender name.  NOTE: some Qatar networks only accept registered
-        sender names - ask the provider; if SMS does not arrive, check the provider's message log.
-     3. In Admin paste SID, token, sender, tick "Send SMS alerts", Save, then press "Send test SMS".
-     Another provider? Choose "Other provider (webhook address)": the website sends the message as JSON to the https address.
-  Telegram is FREE and needs no provider: in Telegram open @BotFather > /newbot > copy the token; open your new bot and press
+  How it works with a PERSONAL WhatsApp: the free service CallMeBot (https://www.callmebot.com) sends a WhatsApp message
+  to your own number. One-time activation, from the WhatsApp that should receive the alerts:
+     1. Save the number +34 644 91 07 79 in your phone contacts (check callmebot.com if it has changed).
+     2. In WhatsApp send that contact exactly:   I allow callmebot to send me messages
+     3. It replies with your API key (within ~2 minutes; if not, try again after 24 hours).
+     4. Admin > Company & Payments: paste the API key, leave the number empty to use your company WhatsApp number (or type
+        another), tick "Send WhatsApp alerts", press Save, then press "Send test WhatsApp".
+  Good to know:
+     - CallMeBot is free, unofficial and "for personal use": no guarantee, and the order details (customer name, address,
+       items) pass through its servers. If you need a guaranteed service, use a paid WhatsApp gateway: choose
+       "Another WhatsApp service (web address)" - the website then sends {to, message} as JSON to that https address.
+     - The alerts go to ONE WhatsApp number (the one that activated CallMeBot). To alert several people, use a WhatsApp group
+       with a paid gateway, or add Telegram (below).
+  Telegram is also free and optional: in Telegram open @BotFather > /newbot > copy the token; open your new bot and press
   Start; find your chat id with @userinfobot; paste token + chat id in Admin, tick "Send Telegram alerts", Save, "Send test".
-  The tokens are stored on the server only, never shown again and never put into the zip or GitHub.
-  Alerts are sent after the customer already got their answer, so a failing SMS provider never blocks an order.
+  The API key / tokens are stored on the server only, never shown again and never put into the zip or GitHub.
+  Alerts are sent after the customer already got their answer, so a failing alert service never blocks an order.
   Every alert (sent or failed, with the reason) appears in the activity log.
 
 
@@ -235,10 +247,11 @@ STEP 7  Share it
      -> see README.txt (Google Client ID and Apple Pay setup). Add https://lofan.qa as an authorised JavaScript origin in Google.
   Customer location "share" does nothing
      -> it needs https:// (padlock). Run AutoSSL (step 5).
-  SMS does not arrive
-     -> Admin > Security > Access & activity log: the line "SMS alert" says why it failed (wrong SID / token, no balance,
-        sender not allowed for Qatar). Press "Send test SMS" in Company & Payments to see the provider's answer. Check the
-        provider's own message log too. Telegram alerts are a free way to confirm the alert system itself works.
+  WhatsApp alert does not arrive
+     -> Admin > Security > Access & activity log: the line "WhatsApp alert" says why it failed (wrong API key, number not
+        activated). Press "Send test WhatsApp" in Company & Payments to see the service's answer. The number must be the same
+        WhatsApp that sent "I allow callmebot to send me messages". If the key never arrived, repeat the activation after 24 h.
+        Telegram alerts are a free way to confirm the alert system itself works.
   After an update the page looks old
      -> press Ctrl+F5 (phone: close the tab and open it again). CSS / JS are cached by the browser for a short time.
   "Reset test data" button is grey

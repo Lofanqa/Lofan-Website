@@ -61,9 +61,10 @@ HOW YOU GET NOTIFIED (keep admin.html open in a tab)
   - Allow browser notifications when asked, to also get alerts when the tab is in the background.
   - Notifications tab: delete one notification, "Delete read" or "Delete all". Chat: the x next to a message deletes it,
     "Clear chat" empties a conversation.
-  - Phone alerts: Admin > Company & Payments > "Order alerts to your phone" sends an SMS (needs an SMS provider account,
-    e.g. Twilio) and/or a free Telegram message for every order: items, customer name, time and location.
-    Step-by-step: hosting/README-HOSTING.txt ("ORDER ALERTS TO YOUR PHONE").
+  - WhatsApp alerts: Admin > Company & Payments > "Order alerts to your phone" sends a WhatsApp message to your own
+    (company / personal) WhatsApp for every order: each item with its price, customer name, phone and address, time and
+    a map link. Free service CallMeBot, one-time activation (2 minutes). A free Telegram message is also possible.
+    Step-by-step: hosting/README-HOSTING.txt ("ORDER ALERTS ON YOUR WHATSAPP"). SMS / Twilio was removed.
 
 AFTER A PAYMENT IS SUBMITTED
   Admin > Orders: check your bank / Fawran / Ooredoo Money statement for the reference and
@@ -193,7 +194,7 @@ SELLING TO REAL CUSTOMERS
   The live site is on cPanel hosting (lofan.qa) - see "PUBLISH ON lofan.qa" above. Before announcing it:
   1. Open https://lofan.qa/admin.html, enter your REAL bank / Fawran / Ooredoo Money details, check prices and stock.
   2. Admin > Security > Reset test data (removes the test customers and orders).
-  3. Set up the phone alerts (SMS / Telegram) and add admin accounts for your team (Admin > Security).
+  3. Set up the WhatsApp alerts and add admin accounts for your team (Admin > Security).
   4. In Google Cloud add https://lofan.qa under Authorised JavaScript origins (only if you use Google sign-in).
   5. Back up weekly (cPanel > Backup, or phpMyAdmin > Export) - see hosting/README-HOSTING.txt.
   Payments: customers pay by IBAN / Fawran / Ooredoo Money and you confirm each payment in admin (free for both sides).

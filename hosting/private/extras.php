@@ -1,5 +1,5 @@
 <?php
-/* LOFAN – extra backend features: admin levels, access log, order alerts (SMS / Telegram / webhook),
+/* LOFAN – extra backend features: admin levels, access log, order alerts (WhatsApp / Telegram),
    unpaid-order release, and the data reset. Loaded after lib.php. */
 defined('LOFAN') or exit;
 
@@ -68,7 +68,7 @@ function expire_unpaid()
     }
 }
 
-/* ------------------------------------------------------------------ alerts: SMS / Telegram / webhook */
+/* ------------------------------------------------------------------ alerts: WhatsApp / Telegram */
 function normalize_e164($s)
 {
     $s = preg_replace('/[^\d+]/', '', str_val($s));
@@ -76,31 +76,36 @@ function normalize_e164($s)
     if ($s !== '' && $s[0] !== '+') $s = strlen($s) === 8 ? '+974' . $s : '+' . $s;
     return preg_match('/^\+\d{8,15}$/D', $s) ? $s : null;
 }
-function parse_recipients($v)
+/* The WhatsApp number that receives the alerts: the one typed in Alerts, otherwise the company WhatsApp number. */
+function whatsapp_target($settings = null)
 {
-    $list = is_array($v) ? $v : preg_split('/[\r\n,;]+/', str_val($v), -1, PREG_SPLIT_NO_EMPTY);   // one per line; spaces inside a number are fine
-    $list = array_values(array_filter(array_map('trim', $list), function ($x) { return $x !== ''; }));
-    $out = [];
-    foreach ($list as $x) {
-        $n = normalize_e164($x);
-        if ($n === null) throw new ApiError(400, 'Phone number "' . clean($x, 30) . '" is not valid. Use the international format, e.g. +97466809657.');
-        if (!in_array($n, $out, true)) $out[] = $n;
-    }
-    if (count($out) > 5) throw new ApiError(400, 'You can add up to 5 phone numbers.');
-    return $out;
+    $s = $settings ?: get_settings();
+    $n = normalize_e164($s['alerts']['whatsapp']['number'] ?? '');
+    if ($n === null) $n = normalize_e164($s['company']['whatsapp'] ?? '');
+    return $n ?: '';
 }
 function queue_alert($event, $orderId) { $GLOBALS['ALERT_QUEUE'][] = [$event, $orderId]; }
 
 function build_alert_text($event, $o)
 {
     $d = json_decode($o['delivery'], true) ?: [];
-    $items = array_map(function ($i) { return (int)$i['qty'] . 'x ' . $i['name']; }, json_decode($o['items'], true) ?: []);
-    $heads = ['placed' => 'NEW ORDER (awaiting payment)', 'submitted' => 'PAYMENT SUBMITTED - please verify', 'confirmed' => 'ORDER CONFIRMED (paid)', 'test' => 'TEST ALERT'];
-    $loc = isset($d['lat'], $d['lng']) ? 'https://maps.google.com/?q=' . $d['lat'] . ',' . $d['lng'] : str_val($d['address'] ?? '');
-    $t = 'LOFAN ' . ($heads[$event] ?? 'ORDER') . "\n#" . $o['id'] . "\nCustomer: " . str_val($d['name'] ?? '') . ' +' . str_val($d['phone'] ?? '')
-        . "\nItems: " . implode(', ', $items) . "\nTotal: " . (int)$o['total'] . ' QAR' . (!empty($o['method']) ? ' (' . $o['method'] . ')' : '')
-        . "\nOrdered: " . date('d M Y H:i', (int)$o['created']) . "\nLocation: " . $loc;
-    return slice($t, 600);
+    $heads = [
+        'placed' => "🛒 *NEW ORDER* - waiting for payment", 'submitted' => "💳 *PAYMENT SUBMITTED* - please verify",
+        'confirmed' => "✅ *ORDER CONFIRMED* (paid)", 'test' => '🔔 *TEST ALERT*',
+    ];
+    $items = array_map(function ($i) {
+        $qty = max(1, (int)$i['qty']); $price = (int)($i['price'] ?? 0);
+        return '• ' . $qty . ' x ' . str_val($i['name']) . ' - ' . ($qty * $price) . ' QAR' . ($qty > 1 ? ' (' . $price . ' each)' : '');
+    }, json_decode($o['items'], true) ?: []);
+    $phone = preg_replace('/\D/', '', str_val($d['phone'] ?? ''));
+    $t = ($heads[$event] ?? '*ORDER*') . "\nOrder: " . $o['id'] . "\nTime: " . date('d M Y, H:i', (int)$o['created'])
+        . "\n\n*Items*\n" . implode("\n", $items)
+        . ((int)$o['shipping'] > 0 ? "\nDelivery: " . (int)$o['shipping'] . ' QAR' : '')
+        . "\n*Total: " . (int)$o['total'] . ' QAR*' . (!empty($o['method']) ? ' - ' . $o['method'] : '')
+        . "\n\n*Customer*\n" . str_val($d['name'] ?? '') . ($phone !== '' ? "\n+" . $phone : '')
+        . "\nAddress: " . str_val($d['address'] ?? '')
+        . (isset($d['lat'], $d['lng']) ? "\nMap: https://maps.google.com/?q=" . $d['lat'] . ',' . $d['lng'] : '');
+    return slice($t, 1200);
 }
 
 /* One HTTP POST. When config has 'alerts_capture' (local testing only) the request is written to that file instead of being sent. */
@@ -121,25 +126,40 @@ function http_post($url, $body, $headers = [], $opts = [], $timeout = 12)
     curl_close($ch);
     return [$res, $code, $err];
 }
+function http_get($url, $timeout = 15)
+{
+    $cap = cfg()['alerts_capture'] ?? null;
+    if ($cap) {
+        @file_put_contents($cap, json_encode(['method' => 'GET', 'url' => $url], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+        return ['Message queued (captured)', 200, ''];
+    }
+    if (!function_exists('curl_init')) return [false, 0, 'cURL is not available on this server'];
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => $timeout, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_FOLLOWLOCATION => false]);
+    $res = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    return [$res, $code, $err];
+}
 function alert_detail($res, $code, $err)
 {
     $j = is_string($res) ? json_decode($res, true) : null;
-    $msg = is_array($j) ? ($j['message'] ?? $j['description'] ?? $j['error'] ?? '') : '';
-    return trim(($err ?: '') . ' ' . (is_string($msg) ? $msg : '') . ($code ? " (HTTP $code)" : ''));
+    $msg = is_array($j) ? ($j['message'] ?? $j['description'] ?? $j['error'] ?? '') : (is_string($res) ? trim(preg_replace('/\s+/', ' ', strip_tags($res))) : '');
+    return trim(($err ?: '') . ' ' . slice(is_string($msg) ? $msg : '', 160) . ($code ? " (HTTP $code)" : ''));
 }
 /* Each sender returns [ok(bool), detail(string)] */
-function send_sms($cfgSms, $to, $text)
+function send_whatsapp($cfgWa, $to, $text)
 {
-    if (($cfgSms['provider'] ?? 'twilio') === 'webhook') {
-        list($res, $code, $err) = http_post($cfgSms['webhookUrl'], json_encode(['to' => $to, 'message' => $text], JSON_UNESCAPED_UNICODE), ['Content-Type: application/json']);
+    if (($cfgWa['provider'] ?? 'callmebot') === 'webhook') {      // any other WhatsApp service that accepts a JSON web request
+        list($res, $code, $err) = http_post($cfgWa['webhookUrl'], json_encode(['to' => $to, 'message' => $text, 'channel' => 'whatsapp'], JSON_UNESCAPED_UNICODE), ['Content-Type: application/json']);
         return [$code >= 200 && $code < 300, alert_detail($res, $code, $err)];
     }
-    $from = $cfgSms['from'];
-    $f = ['To' => $to, 'Body' => $text];
-    if (strpos($from, 'MG') === 0) $f['MessagingServiceSid'] = $from; else $f['From'] = $from;
-    list($res, $code, $err) = http_post('https://api.twilio.com/2010-04-01/Accounts/' . rawurlencode($cfgSms['twilioSid']) . '/Messages.json', http_build_query($f), [],
-        [CURLOPT_USERPWD => $cfgSms['twilioSid'] . ':' . $cfgSms['twilioToken']]);
-    return [$code === 200 || $code === 201, alert_detail($res, $code, $err)];
+    // CallMeBot: free WhatsApp messages to your OWN number (you activate it once from your WhatsApp)
+    $url = 'https://api.callmebot.com/whatsapp.php?phone=' . rawurlencode($to) . '&text=' . rawurlencode($text) . '&apikey=' . rawurlencode($cfgWa['apiKey']);
+    list($res, $code, $err) = http_get($url);
+    $bad = is_string($res) && preg_match('/error|invalid|not valid|wrong|incorrect|blocked/i', $res);
+    return [$code === 200 && !$bad && $err === '', alert_detail($res, $code, $err)];
 }
 function send_telegram($cfgTg, $text)
 {
@@ -153,10 +173,12 @@ function deliver_alert($text, $only = null)
 {
     $a = get_settings()['alerts'];
     $out = [];
-    if (($only === null || $only === 'sms') && !empty($a['sms']['enabled'])) {
-        foreach ($a['sms']['recipients'] as $to) {
-            list($ok, $d) = send_sms($a['sms'], $to, $text);
-            $out[] = ['sms', $to, $ok, $d];
+    if (($only === null || $only === 'whatsapp') && !empty($a['whatsapp']['enabled'])) {
+        $to = whatsapp_target();
+        if ($to === '') $out[] = ['whatsapp', '(no number)', false, 'No WhatsApp number is set. Add it in Admin > Company & Payments.'];
+        else {
+            list($ok, $d) = send_whatsapp($a['whatsapp'], $to, $text);
+            $out[] = ['whatsapp', $to, $ok, $d];
         }
     }
     if (($only === null || $only === 'telegram') && !empty($a['telegram']['enabled'])) {

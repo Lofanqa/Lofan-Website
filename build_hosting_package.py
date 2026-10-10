@@ -50,9 +50,10 @@ def export_seed():
         ap = st.get('applepay', {})
         st['applepay'] = {**ap, 'enabled': False, 'secretKey': '', 'publicKey': '', 'domainFile': '', 'merchantId': '', 'domain': ''}
         st['google'] = {'clientId': ''}
-        al = st.get('alerts') or {}                                   # never export SMS / Telegram secrets
-        if isinstance(al.get('sms'), dict): al['sms']['twilioToken'] = ''
-        if isinstance(al.get('telegram'), dict): al['telegram']['botToken'] = ''
+        al = st.get('alerts') or {}                                   # never export WhatsApp / Telegram secrets
+        al.pop('sms', None)                                           # SMS / Twilio alerts were removed
+        if isinstance(al.get('whatsapp'), dict): al['whatsapp'].update({'apiKey': '', 'enabled': False})
+        if isinstance(al.get('telegram'), dict): al['telegram'].update({'botToken': '', 'enabled': False})
         seed['settings'] = st
     if FULL:
         for t in ('users', 'orders', 'order_events', 'messages', 'notifications', 'enquiries'):

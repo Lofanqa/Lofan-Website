@@ -41,6 +41,7 @@ h1,h2,h3{font-family:var(--serif);font-weight:400;line-height:1.1}
 .search-info:empty{display:none}
 .topbar button.on{opacity:.7}
 .empty .btn{margin-top:12px}.empty p+p{margin-top:4px}
+.steps-list{margin:8px 0 2px 20px;padding:0}.steps-list li{margin:3px 0}
 .pw-rules{list-style:none;display:flex;flex-wrap:wrap;gap:2px 16px;margin:8px 0 0;font-size:12px;letter-spacing:0;text-transform:none;color:var(--muted)}
 .pw-rules li::before{content:"○";margin-right:6px;font-size:11px}
 .pw-rules li.ok{color:#3d6b2a}.pw-rules li.ok::before{content:"✓";font-weight:600}

@@ -596,28 +596,33 @@ async function renderSettings() {
 
     <h3>Order alerts to your phone</h3>
     ${(() => {
-      const al = s.alerts || {}, ev = al.events || {}, sm = al.sms || {}, tg = al.telegram || {};
-      return `<p class="muted small">Get a message on your phone for every order: item names, customer name, time and location link.</p>
-      <p class="small"><strong>Send alert when:</strong></p>
-      <label class="chk"><input type="checkbox" name="alerts.events.placed" ${ev.placed ? 'checked' : ''}> a customer places an order (not paid yet)</label>
+      const al = s.alerts || {}, ev = al.events || {}, wa = al.whatsapp || {}, tg = al.telegram || {};
+      return `<p class="muted small">Get a WhatsApp message on your phone for every order: item names with prices, customer name, address, time and a map link.</p>
+      <p class="small"><strong>Send an alert when:</strong></p>
+      <label class="chk"><input type="checkbox" name="alerts.events.placed" ${ev.placed !== false ? 'checked' : ''}> a customer places an order (not paid yet)</label>
       <label class="chk"><input type="checkbox" name="alerts.events.submitted" ${ev.submitted !== false ? 'checked' : ''}> a customer submits their payment (you need to verify it)</label>
       <label class="chk"><input type="checkbox" name="alerts.events.confirmed" ${ev.confirmed !== false ? 'checked' : ''}> an order is confirmed (payment verified / Apple Pay paid)</label>
 
-      <h4>SMS</h4>
-      <div class="set-warn">SMS is sent by an SMS provider, so you need an account with one (for example <strong>Twilio</strong>) and a small prepaid balance. Qatar numbers may also need a registered sender name – ask the provider. Fill the fields below, tick "Send SMS", Save, then press "Send test SMS".</div>
-      <label class="chk"><input type="checkbox" name="alerts.sms.enabled" ${sm.enabled ? 'checked' : ''}> Send SMS alerts</label>
+      <h4>WhatsApp</h4>
+      <div class="set-warn"><strong>One-time activation (2 minutes) – do it from the WhatsApp that should receive the alerts:</strong>
+        <ol class="steps-list">
+          <li>Save the number <strong>+34 644 91 07 79</strong> (CallMeBot) in your phone contacts. (If it does not work, check the current number on <a class="ulink" href="https://www.callmebot.com/blog/free-api-whatsapp-messages/" target="_blank" rel="noopener">callmebot.com</a>.)</li>
+          <li>In WhatsApp send that contact this exact message: <em>I allow callmebot to send me messages</em></li>
+          <li>It replies with your <strong>API key</strong> (within about 2 minutes; if not, try again after 24 hours). Paste the key below.</li>
+          <li>Tick "Send WhatsApp alerts", press Save, then "Send test WhatsApp".</li>
+        </ol></div>
+      <label class="chk"><input type="checkbox" name="alerts.whatsapp.enabled" ${wa.enabled ? 'checked' : ''}> Send WhatsApp alerts</label>
       <div class="set-grid">
-        <label>Phone numbers to alert (one per line, up to 5)<textarea name="alerts.sms.recipients" rows="3" placeholder="+97466809657">${v((sm.recipients || []).join('\n'))}</textarea></label>
-        <label>SMS provider<select name="alerts.sms.provider"><option value="twilio" ${sm.provider !== 'webhook' ? 'selected' : ''}>Twilio</option><option value="webhook" ${sm.provider === 'webhook' ? 'selected' : ''}>Other provider (webhook address)</option></select></label>
-        <label>Twilio Account SID<input name="alerts.sms.twilioSid" value="${v(sm.twilioSid)}" placeholder="AC…"></label>
-        <label>Twilio Auth Token<input type="password" name="alerts.sms.twilioToken" autocomplete="new-password" placeholder="${sm.hasToken ? 'Saved – leave blank to keep' : ''}"></label>
-        <label>Send from (Twilio number +…, Messaging Service SID MG…, or a sender name)<input name="alerts.sms.from" value="${v(sm.from)}" placeholder="+1…"></label>
-        <label>Webhook address (only for "Other provider", https://…)<input name="alerts.sms.webhookUrl" value="${v(sm.webhookUrl)}" placeholder="https://…"></label>
+        <label>WhatsApp number that receives the alerts<input name="alerts.whatsapp.number" value="${v(wa.number)}" placeholder="${v(wa.target || '+974…')}"><small class="hint muted">Leave empty to use your company WhatsApp number${wa.target ? ' (<strong>' + v(wa.target) + '</strong>)' : ''}. It must be the WhatsApp that did the activation above.</small></label>
+        <label>CallMeBot API key<input type="password" name="alerts.whatsapp.apiKey" autocomplete="new-password" placeholder="${wa.hasKey ? 'Saved – leave blank to keep' : 'the key you received on WhatsApp'}"></label>
+        <label>Service<select name="alerts.whatsapp.provider"><option value="callmebot" ${wa.provider !== 'webhook' ? 'selected' : ''}>CallMeBot (free, personal WhatsApp)</option><option value="webhook" ${wa.provider === 'webhook' ? 'selected' : ''}>Another WhatsApp service (web address)</option></select></label>
+        <label>Web address of that service (only for "Another WhatsApp service", https://…)<input name="alerts.whatsapp.webhookUrl" value="${v(wa.webhookUrl)}" placeholder="https://…"></label>
       </div>
-      <button type="button" class="btn ghost" data-test="sms">Send test SMS</button>
+      <p class="muted small">CallMeBot is a free third-party service for personal use: the order details (customer name, address, items) pass through its servers, and it is not guaranteed. For a guaranteed business service use a paid WhatsApp gateway and choose "Another WhatsApp service".</p>
+      <button type="button" class="btn ghost" data-test="whatsapp">Send test WhatsApp</button>
 
       <h4>Telegram (free)</h4>
-      <p class="muted small">A free alternative that needs no SMS provider: create a bot with @BotFather in Telegram, copy its token, send the bot a message, and use your chat id (e.g. from @userinfobot).</p>
+      <p class="muted small">An optional extra: create a bot with @BotFather in Telegram, copy its token, send the bot a message, and use your chat id (e.g. from @userinfobot).</p>
       <label class="chk"><input type="checkbox" name="alerts.telegram.enabled" ${tg.enabled ? 'checked' : ''}> Send Telegram alerts</label>
       <div class="set-grid">
         <label>Bot token<input type="password" name="alerts.telegram.botToken" autocomplete="new-password" placeholder="${tg.hasToken ? 'Saved – leave blank to keep' : '123456789:AA…'}"></label>
@@ -649,7 +654,7 @@ async function renderSettings() {
     try { await api('/admin/settings', { method: 'PUT', body }); note.textContent = 'Saved. Customers will see these details immediately.'; $('#setWarn').hidden = ibanOk($('#ibanInput').value); toast('Settings saved'); }
     catch (err) { note.textContent = err.message; note.classList.add('err'); }
   });
-  $('#setForm').addEventListener('click', async e => {   // "Send test SMS / Telegram" (uses the settings you saved)
+  $('#setForm').addEventListener('click', async e => {   // "Send test WhatsApp / Telegram" (uses the settings you saved)
     const b = e.target.closest('[data-test]'); if (!b) return;
     const note = $('#testNote'); note.className = 'note'; note.textContent = 'Sending…'; b.disabled = true;
     try {
@@ -674,7 +679,7 @@ const ACTION_LABEL = {
   'order.status': 'Order status', 'product.add': 'Product added', 'product.edit': 'Product edited', 'product.delete': 'Product deleted', 'product.deleteSoldOut': 'Sold-out items deleted',
   'settings.update': 'Settings changed', 'customer.delete': 'Customer erased', 'enquiry.delete': 'Enquiry deleted', 'notifications.delete': 'Notifications deleted',
   'chat.delete': 'Chat message deleted', 'chat.clear': 'Chat cleared', reset: 'DATA RESET', 'session.revoke': 'Session signed out', 'session.revokeAll': 'Sessions signed out',
-  'alert.sms': 'SMS alert', 'alert.telegram': 'Telegram alert', 'alert.test': 'Alert test'
+  'alert.whatsapp': 'WhatsApp alert', 'alert.sms': 'SMS alert (old)', 'alert.telegram': 'Telegram alert', 'alert.test': 'Alert test'
 };
 async function renderSecurity() {
   const owner = isOwner();

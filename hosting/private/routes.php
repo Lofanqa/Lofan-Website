@@ -597,27 +597,29 @@ function handle_api($method, $route, $body)
             $al = $d['alerts'];
             $a = &$s['alerts'];
             if (is_array($al['events'] ?? null)) foreach (['placed', 'submitted', 'confirmed'] as $k) if (array_key_exists($k, $al['events'])) $a['events'][$k] = (bool)$al['events'][$k];
-            $sm = is_array($al['sms'] ?? null) ? $al['sms'] : [];
-            if (array_key_exists('enabled', $sm)) $a['sms']['enabled'] = (bool)$sm['enabled'];
-            if (array_key_exists('provider', $sm)) {
-                if (!in_array($sm['provider'], ['twilio', 'webhook'], true)) throw new ApiError(400, 'Unknown SMS provider.');
-                $a['sms']['provider'] = $sm['provider'];
+            unset($a['sms']);                                                    // SMS / Twilio alerts no longer exist
+            $wa = is_array($al['whatsapp'] ?? null) ? $al['whatsapp'] : [];
+            if (array_key_exists('enabled', $wa)) $a['whatsapp']['enabled'] = (bool)$wa['enabled'];
+            if (array_key_exists('provider', $wa)) {
+                if (!in_array($wa['provider'], ['callmebot', 'webhook'], true)) throw new ApiError(400, 'Unknown WhatsApp service.');
+                $a['whatsapp']['provider'] = $wa['provider'];
             }
-            if (array_key_exists('recipients', $sm)) $a['sms']['recipients'] = parse_recipients($sm['recipients']);
-            foreach (['twilioSid' => 60, 'from' => 40, 'webhookUrl' => 300] as $k => $mx) if (array_key_exists($k, $sm)) $a['sms'][$k] = clean($sm[$k], $mx);
-            if (!empty($sm['twilioToken'])) $a['sms']['twilioToken'] = clean($sm['twilioToken'], 80);   // blank = keep the saved one
-            if ($a['sms']['twilioSid'] !== '' && !preg_match('/^AC[0-9a-fA-F]{32}$/D', $a['sms']['twilioSid'])) throw new ApiError(400, 'Twilio Account SID looks wrong (it starts with AC and has 34 characters).');
-            if ($a['sms']['from'] !== '' && !preg_match('/^(\+\d{8,15}|MG[0-9a-fA-F]{32}|[A-Za-z0-9 ]{1,11})$/D', $a['sms']['from'])) throw new ApiError(400, 'SMS "From" must be your Twilio number (+...), a Messaging Service SID (MG...) or a sender name up to 11 letters.');
-            if ($a['sms']['webhookUrl'] !== '' && !preg_match('#^https://[^\s]+$#D', $a['sms']['webhookUrl'])) throw new ApiError(400, 'The SMS webhook address must start with https://');
-            if (!empty($a['sms']['enabled'])) {
+            if (array_key_exists('number', $wa)) {
+                $nr = clean($wa['number'], 30);
+                $e = $nr === '' ? '' : normalize_e164($nr);
+                if ($e === null) throw new ApiError(400, 'That WhatsApp number is not valid. Use the international format, e.g. +97466404222.');
+                $a['whatsapp']['number'] = $e;                                  // blank = use the company WhatsApp number
+            }
+            if (!empty($wa['apiKey'])) $a['whatsapp']['apiKey'] = clean($wa['apiKey'], 40);   // blank = keep the saved one
+            if (array_key_exists('webhookUrl', $wa)) $a['whatsapp']['webhookUrl'] = clean($wa['webhookUrl'], 300);
+            if ($a['whatsapp']['apiKey'] !== '' && !preg_match('/^[A-Za-z0-9_-]{3,40}$/D', $a['whatsapp']['apiKey'])) throw new ApiError(400, 'The CallMeBot API key looks wrong (letters and numbers only, no spaces).');
+            if ($a['whatsapp']['webhookUrl'] !== '' && !preg_match('#^https://[^\s]+$#D', $a['whatsapp']['webhookUrl'])) throw new ApiError(400, 'The WhatsApp service address must start with https://');
+            if (!empty($a['whatsapp']['enabled'])) {
                 $miss = [];
-                if (!$a['sms']['recipients']) $miss[] = 'at least one phone number';
-                if ($a['sms']['provider'] === 'twilio') {
-                    if ($a['sms']['twilioSid'] === '') $miss[] = 'Twilio Account SID';
-                    if ($a['sms']['twilioToken'] === '') $miss[] = 'Twilio Auth Token';
-                    if ($a['sms']['from'] === '') $miss[] = '"From" number';
-                } elseif ($a['sms']['webhookUrl'] === '') $miss[] = 'webhook address';
-                if ($miss) throw new ApiError(400, 'SMS cannot be switched on yet. Still needed: ' . implode(', ', $miss) . '.');
+                if (whatsapp_target($s) === '') $miss[] = 'the WhatsApp number';
+                if ($a['whatsapp']['provider'] === 'callmebot') { if ($a['whatsapp']['apiKey'] === '') $miss[] = 'the CallMeBot API key'; }
+                elseif ($a['whatsapp']['webhookUrl'] === '') $miss[] = 'the service address (https://...)';
+                if ($miss) throw new ApiError(400, 'WhatsApp alerts cannot be switched on yet. Still needed: ' . implode(', ', $miss) . '.');
             }
             $tg = is_array($al['telegram'] ?? null) ? $al['telegram'] : [];
             if (array_key_exists('enabled', $tg)) $a['telegram']['enabled'] = (bool)$tg['enabled'];
@@ -855,9 +857,9 @@ function handle_api($method, $route, $body)
     /* ----- test the order alerts (owner only) ----- */
     if ($R('POST', 'admin/alerts/test')) {
         need_owner(); $d = $json();
-        $ch = in_array($d['channel'] ?? '', ['sms', 'telegram'], true) ? $d['channel'] : null;
-        $res = deliver_alert("LOFAN TEST ALERT\nIf you can read this, your order alerts work.\nTime: " . date('d M Y H:i'), $ch);
-        if (!$res) throw new ApiError(400, 'No alert channel is switched on yet. Switch on SMS or Telegram, press Save, then test again.');
+        $ch = in_array($d['channel'] ?? '', ['whatsapp', 'telegram'], true) ? $d['channel'] : null;
+        $res = deliver_alert("🔔 *LOFAN TEST ALERT*\nIf you can read this, your order alerts work.\nTime: " . date('d M Y, H:i'), $ch);
+        if (!$res) throw new ApiError(400, 'No alert channel is switched on yet. Switch on WhatsApp or Telegram, press Save, then test again.');
         foreach ($res as $r) log_admin('alert.test', $r[0] . ' to ' . $r[1] . ' - ' . ($r[2] ? 'sent' : 'FAILED ' . $r[3]));
         return [200, ['results' => array_map(function ($r) { return ['channel' => $r[0], 'to' => $r[1], 'ok' => $r[2], 'detail' => $r[3]]; }, $res)]];
     }

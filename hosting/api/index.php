@@ -69,8 +69,8 @@ try {
     send_json(500, ['error' => 'Server error']);
 }
 
-/* After the answer is on its way to the visitor: send SMS / Telegram alerts and keep failed-sign-in log entries.
-   (The customer never waits for the SMS provider.) */
+/* After the answer is on its way to the visitor: send WhatsApp / Telegram alerts and keep failed-sign-in log entries.
+   (The customer never waits for the alert service.) */
 if (!empty($GLOBALS['ALERT_QUEUE']) || !empty($GLOBALS['LOG_ALWAYS'])) {
     if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
     elseif (function_exists('litespeed_finish_request')) litespeed_finish_request();
