@@ -57,9 +57,15 @@ $('#profileForm').addEventListener('submit', async e => {
 $('#pwForm').addEventListener('submit', async e => {
   e.preventDefault();
   const note = $('#pwNote'); note.className = 'note';
-  try { await api('/me/password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); e.target.reset(); note.textContent = 'Password updated.'; }
-  catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  const d = Object.fromEntries(new FormData(e.target));
+  if (pwProblem(d.new)) { note.textContent = PW_RULE; note.classList.add('err'); e.target.elements.new.focus(); return; }
+  try {
+    await api('/me/password', { method: 'POST', body: d });
+    e.target.reset(); $$('#pwForm [data-pw-rules] li').forEach(li => li.classList.remove('ok'));
+    note.textContent = 'Password updated.';
+  } catch (err) { note.textContent = err.message; note.classList.add('err'); }
 });
+bindPwRules($('#pwForm'), 'new');
 function fillProfile() {
   const f = $('#profileForm'), u = state.user;
   ['name', 'phone', 'email', 'address'].forEach(k => { f.elements[k].value = u[k] || ''; });

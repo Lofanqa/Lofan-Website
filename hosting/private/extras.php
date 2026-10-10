@@ -13,6 +13,15 @@ function need_owner()
 }
 function is_owner($u) { return admin_level($u) === 'owner'; }
 
+/* Password rule for every NEW password (sign-up, change, admin accounts): 8+ characters with letters AND numbers.
+   Signing in is never blocked by this rule, so older accounts keep working until their owner changes the password. */
+const PASSWORD_RULE = 'Password must be at least 8 characters and include both letters and numbers.';
+function password_ok($pw)
+{
+    $pw = (string)$pw;
+    return strlen($pw) >= 8 && preg_match('/\p{L}/u', $pw) === 1 && preg_match('/[0-9]/', $pw) === 1;
+}
+
 /* ------------------------------------------------------------------ access / activity log */
 function user_agent_short() { return slice(str_val($_SERVER['HTTP_USER_AGENT'] ?? ''), 250); }
 /* $always = true: also keep the entry when the request is rolled back (e.g. a failed sign-in). */

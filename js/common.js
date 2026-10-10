@@ -120,6 +120,16 @@ function bindAccountBtn() {
     else openAuth('login');
   });
 }
+/* Password rule for new passwords: at least 8 characters with letters AND numbers (the server enforces it too). */
+const PW_RULE = 'Password must be at least 8 characters and include both letters and numbers.';
+const pwChecks = v => ({ len: String(v).length >= 8, letter: /\p{L}/u.test(v), num: /[0-9]/.test(v) });
+const pwProblem = v => { const c = pwChecks(v || ''); return c.len && c.letter && c.num ? '' : PW_RULE; };
+const PW_RULES_HTML = '<ul class="pw-rules" data-pw-rules aria-live="polite"><li data-r="len">8 or more characters</li><li data-r="letter">a letter</li><li data-r="num">a number</li></ul>';
+function bindPwRules(form, field = 'password') {   // live tick-list under the password box
+  const input = form && form.elements[field], box = form && $('[data-pw-rules]', form); if (!input || !box) return;
+  const paint = () => { const c = pwChecks(input.value); $$('li', box).forEach(li => li.classList.toggle('ok', !!c[li.dataset.r])); };
+  input.addEventListener('input', paint); paint();
+}
 function openAuth(view = 'login', opts = {}) { authOpts = opts; renderAuth(view); }
 function renderAuth(view) {
   const reg = view === 'register';
@@ -132,7 +142,7 @@ function renderAuth(view) {
       <label>Full name<input name="name" autocomplete="name" required></label>
       <label>Mobile number (Qatar)<input name="phone" inputmode="tel" autocomplete="tel" placeholder="e.g. 5555 1234" required><small class="field-hint" data-hint="phone"></small></label>
       <label>Email<input type="email" name="email" autocomplete="email" required><small class="field-hint" data-hint="email"></small></label>
-      <label>Password (min. 6 characters)<input type="password" name="password" autocomplete="new-password" required></label>
+      <label>Password<input type="password" name="password" autocomplete="new-password" required>${PW_RULES_HTML}</label>
       <label>Confirm password<input type="password" name="confirm" autocomplete="new-password" required></label>
       <button class="btn full" type="submit">Create Account</button><p class="note" data-note></p>
     </form>` : `
@@ -143,7 +153,7 @@ function renderAuth(view) {
     </form>`}
     ${state.googleId ? '<div class="or"><span>or</span></div><div id="gBtn" class="gbtn"></div>' : ''}`);
   setTimeout(() => { const f = $('#modalBody input'); if (f) f.focus(); }, 60);
-  if (reg) watchDuplicates();
+  if (reg) { watchDuplicates(); bindPwRules($('form[data-auth-form="register"]')); }
   mountGoogle();
 }
 
@@ -217,7 +227,10 @@ async function onAuthSubmit(e) {
     $$('.invalid', f).forEach(x => x.classList.remove('invalid'));
     if (field && f.elements[field]) { f.elements[field].classList.add('invalid'); f.elements[field].focus(); }
   };
-  if (kind === 'register' && d.password !== d.confirm) return fail('Passwords do not match.');
+  if (kind === 'register') {
+    if (pwProblem(d.password)) return fail(PW_RULE, 'password');
+    if (d.password !== d.confirm) return fail('Passwords do not match.', 'confirm');
+  }
   const btn = $('button[type=submit]', f); btn.disabled = true;
   try {
     if (kind === 'phone') {
@@ -245,7 +258,7 @@ function renderChrome() {
   const el = $('#chrome'); if (!el) return;
   el.innerHTML = `
   <div class="topbar"><span></span><p>Free shipping on orders above 300 QAR</p>
-    <nav><button id="accountBtn">My Account</button><i>|</i><a href="index.html#cart">Cart (<span id="cartCount">0</span>)</a></nav></div>
+    <nav><button id="accountBtn">My Account</button><i>|</i><a href="index.html?search=1">Search</a><i>|</i><a href="index.html#cart">Cart (<span id="cartCount">0</span>)</a></nav></div>
   <header class="header">
     <button class="burger" id="burger" aria-label="Menu"><span></span><span></span><span></span></button>
     <nav class="nav nav-left"><a href="index.html">Home</a><a href="index.html#shop">Shop</a><a href="index.html#about">About</a></nav>

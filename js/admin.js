@@ -30,7 +30,7 @@ async function gate() {
     <form id="setupForm" novalidate>
       <label>Your name<input name="name" required></label>
       <label>Admin email<input name="email" type="email" required></label>
-      <label>Password (min. 8 characters)<input name="password" type="password" autocomplete="new-password" required></label>
+      <label>Password (8+ characters, letters and numbers)<input name="password" type="password" autocomplete="new-password" required></label>
       <button class="btn full" type="submit">Create Admin Account</button><p class="note" id="gateNote"></p>
     </form>`;
   const note = $('#gateNote');
@@ -707,7 +707,7 @@ async function renderSecurity() {
     <form id="addAdmin" class="adm-add" novalidate>
       <label>Name<input name="name" required placeholder="e.g. Sales manager"></label>
       <label>Email<input name="email" type="email" required></label>
-      <label>Password (min. 8)<input name="password" type="password" autocomplete="new-password" required></label>
+      <label>Password (8+, letters and numbers)<input name="password" type="password" autocomplete="new-password" required></label>
       <label>Level<select name="level"><option value="staff">Staff</option><option value="owner">Owner</option></select></label>
       <button class="btn" type="submit">Add admin</button>
     </form>
@@ -717,7 +717,7 @@ async function renderSecurity() {
     <form id="adminPw" class="set-pw" novalidate>
       <div class="set-grid">
         <label>Current password<input type="password" name="current" autocomplete="current-password"></label>
-        <label>New password (min. 8 characters)<input type="password" name="new" autocomplete="new-password"></label>
+        <label>New password (8+ characters, letters and numbers)<input type="password" name="new" autocomplete="new-password"></label>
       </div>
       <button class="btn ghost" type="submit">Change my password</button><p class="note" id="pwNote"></p>
     </form>
@@ -798,7 +798,7 @@ async function renderSecurity() {
   });
 }
 function askNewPassword(id) {
-  Modal.open(`<h2>Reset <em>password</em></h2><p class="gate-note">Choose a new password for this admin (min. 8 characters). They will be signed out everywhere.</p>
+  Modal.open(`<h2>Reset <em>password</em></h2><p class="gate-note">Choose a new password for this admin (8+ characters with letters and numbers). They will be signed out everywhere.</p>
     <form id="newPwForm" novalidate><label>New password<input name="password" type="password" autocomplete="new-password" required></label>
     <button class="btn full" type="submit">Set password</button><p class="note" data-note></p></form>`);
   $('#newPwForm').addEventListener('submit', async e => {

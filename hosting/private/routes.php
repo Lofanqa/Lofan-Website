@@ -46,7 +46,7 @@ function handle_api($method, $route, $body)
         if (slen($name) < 2) throw new ApiError(400, 'Please enter your full name.', 'name');
         if (!valid_phone($phone)) throw new ApiError(400, 'Please enter a valid mobile number.', 'phone');
         if (!valid_email($email)) throw new ApiError(400, 'Please enter a valid email address.', 'email');
-        if (strlen($pw) < 6) throw new ApiError(400, 'Password must be at least 6 characters.', 'password');
+        if (!password_ok($pw)) throw new ApiError(400, PASSWORD_RULE, 'password');
         $em = q_one('SELECT google_sub, `hash` FROM users WHERE email=?', [$email]);
         $ph = q_val('SELECT 1 FROM users WHERE phone=?', [$phone]);
         if ($em && $ph) throw new ApiError(409, 'This email and mobile number are already registered to an existing account. Please sign in instead.', 'email');
@@ -154,7 +154,7 @@ function handle_api($method, $route, $body)
         $d = $json();
         $name = clean($d['name'] ?? '', 80); $email = lower(clean($d['email'] ?? '', 120)); $pw = str_val($d['password'] ?? '');
         if (strlen($name) < 2 || !valid_email($email)) throw new ApiError(400, 'Enter a name and a valid email.');
-        if (strlen($pw) < 8) throw new ApiError(400, 'Admin password must be at least 8 characters.');
+        if (!password_ok($pw)) throw new ApiError(400, 'Admin ' . lcfirst(PASSWORD_RULE));
         if (q_val('SELECT 1 FROM users WHERE email=?', [$email])) throw new ApiError(409, 'That email is already used by a customer account.');
         $id = q_insert("INSERT INTO users(name,email,phone,salt,`hash`,role,created,admin_level) VALUES(?,?,?,?,?,?,?,?)", [$name, $email, 'admin-' . bin2hex(random_bytes(4)), '', hash_new_pw($pw), 'admin', now(), 'owner']);
         start_session($id, true);
@@ -193,7 +193,7 @@ function handle_api($method, $route, $body)
         $u = need_user(); $d = $json();
         if (!empty($u['hash']) && !check_pw(str_val($d['current'] ?? ''), $u)) throw new ApiError(400, 'Current password is incorrect.');   // Google-only accounts have no password yet
         $new = str_val($d['new'] ?? '');
-        if (strlen($new) < ($u['role'] === 'admin' ? 8 : 6)) throw new ApiError(400, 'New password is too short.');
+        if (!password_ok($new)) throw new ApiError(400, 'New ' . lcfirst(PASSWORD_RULE), 'new');
         q_exec("UPDATE users SET salt='', `hash`=? WHERE id=?", [hash_new_pw($new), (int)$u['id']]);
         q_exec('DELETE FROM sessions WHERE user_id=? AND token<>?', [(int)$u['id'], session_token()]);   // other devices are signed out
         if ($u['role'] === 'admin') log_admin('password.change', 'Changed own password', $u);
@@ -744,7 +744,7 @@ function handle_api($method, $route, $body)
         $name = clean($d['name'] ?? '', 80); $email = lower(clean($d['email'] ?? '', 120)); $pw = str_val($d['password'] ?? '');
         $level = ($d['level'] ?? 'staff') === 'owner' ? 'owner' : 'staff';
         if (slen($name) < 2 || !valid_email($email)) throw new ApiError(400, 'Enter a name and a valid email for the new admin.');
-        if (strlen($pw) < 8) throw new ApiError(400, 'The password must be at least 8 characters.');
+        if (!password_ok($pw)) throw new ApiError(400, PASSWORD_RULE);
         if (q_val('SELECT 1 FROM users WHERE email=?', [$email])) throw new ApiError(409, 'This email already has an account (customer or admin). Use a different email.');
         if ((int)q_val("SELECT COUNT(*) FROM users WHERE role='admin'") >= 10) throw new ApiError(409, 'You can have up to 10 admin accounts.');
         $id = q_insert("INSERT INTO users(name,email,phone,salt,`hash`,role,created,admin_level,disabled) VALUES(?,?,?,?,?,?,?,?,0)",
@@ -780,7 +780,7 @@ function handle_api($method, $route, $body)
             $did[] = $dis ? 'disabled' : 'enabled';
         }
         if (!empty($d['password'])) {
-            if (strlen(str_val($d['password'])) < 8) throw new ApiError(400, 'The password must be at least 8 characters.');
+            if (!password_ok(str_val($d['password']))) throw new ApiError(400, PASSWORD_RULE);
             q_exec("UPDATE users SET salt='', `hash`=? WHERE id=?", [hash_new_pw(str_val($d['password'])), $id]);
             if (!$self) q_exec('DELETE FROM sessions WHERE user_id=?', [$id]);
             $did[] = 'password reset';

@@ -25,7 +25,8 @@ const stockOf = p => (p ? p.stock : 0);
 function goTo(hash) {
   if (!hash || hash === '#top') { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
   const el = $(hash); if (!el) return;
-  const y = el.getBoundingClientRect().top + window.scrollY - $('.header').offsetHeight + 1;
+  const sb = $('#searchbar'), bar = sb && sb.classList.contains('open') ? sb.offsetHeight : 0;   // the search bar is pinned under the header
+  const y = el.getBoundingClientRect().top + window.scrollY - $('.header').offsetHeight - bar + 1;
   window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
 }
 document.addEventListener('click', e => {
@@ -47,11 +48,21 @@ window.addEventListener('scroll', spy, { passive: true });
 
 /* ---------- Shop ---------- */
 function renderFilters() {
-  $('#filters').innerHTML = '<button class="' + (filter === 'all' ? 'on' : '') + '" data-filter="all">All</button>' +
-    Object.entries(CATS).map(([k, v]) => `<button class="${filter === k ? 'on' : ''}" data-filter="${esc(k)}">${esc(v)}</button>`).join('');
+  const on = query ? 'all' : filter;   // while searching, every category is searched
+  $('#filters').innerHTML = '<button class="' + (on === 'all' ? 'on' : '') + '" data-filter="all">All</button>' +
+    Object.entries(CATS).map(([k, v]) => `<button class="${on === k ? 'on' : ''}" data-filter="${esc(k)}">${esc(v)}</button>`).join('');
+}
+/* Search: every word typed must appear in the name, category or description (any order, capitals and plurals ignored). */
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const stem = w => (w.length > 3 ? w.replace(/(ies|es|s)$/, m => (m === 'ies' ? 'y' : '')) : w);
+function searchWords() { return norm(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean); }
+function productMatches(p, words) {
+  const hay = norm(p.name + ' ' + (CATS[p.cat] || '') + ' ' + (p.desc || ''));
+  return words.every(w => hay.includes(w) || hay.includes(stem(w)));
 }
 function renderProducts() {
-  const list = PRODUCTS.filter(p => (filter === 'all' || p.cat === filter) && (p.name + ' ' + (CATS[p.cat] || '')).toLowerCase().includes(query));
+  const words = searchWords();
+  const list = PRODUCTS.filter(p => words.length ? productMatches(p, words) : (filter === 'all' || p.cat === filter));
   $('#productGrid').innerHTML = list.map(p => `
     <article class="card" data-id="${p.id}">
       <div class="pic ${p.stock > 0 ? '' : 'sold'}" title="View details"><img src="${esc(p.img)}" alt="${esc(p.name)}" loading="lazy"><span class="pic-view">View details</span></div>
@@ -62,8 +73,13 @@ function renderProducts() {
       ${p.stock > 0 ? `<button class="add" data-id="${p.id}">Add to Cart</button>` : '<button class="add" disabled>Sold out</button>'}
     </article>`).join('');
   $('#emptyMsg').hidden = list.length > 0;
+  $('#emptyQuery').textContent = query ? '“' + query + '”' : 'this category';
+  $('#emptyClear').hidden = !query;
+  const info = $('#searchInfo');
+  if (info) info.textContent = !words.length ? '' : list.length ? `${list.length} piece${list.length === 1 ? '' : 's'} found for “${query}”` : `No pieces found for “${query}”`;
+  const clr = $('#searchClear'); if (clr) clr.hidden = !query;
 }
-function setFilter(f) { filter = f; renderFilters(); renderProducts(); }
+function setFilter(f) { filter = f; if (query) clearSearch(false); else { renderFilters(); renderProducts(); } }
 $('#filters').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setFilter(b.dataset.filter); });
 $$('.cat[data-filter]').forEach(a => a.addEventListener('click', () => setFilter(a.dataset.filter)));
 $('#productGrid').addEventListener('click', e => {
@@ -166,11 +182,34 @@ function renderMini() {
     <p class="ship">${t.shipping ? `Add ${money(SHIPPING.freeFrom - t.subtotal)} more for free shipping.` : 'You get free shipping!'}</p>
     <div class="mc-btns"><button class="btn ghost" id="miniView">View cart</button><button class="btn" id="miniCheckout">Checkout</button></div>` : '';
 }
-$('#searchBtn').addEventListener('click', () => {
-  const bar = $('#searchbar'); bar.classList.toggle('open');
-  if (bar.classList.contains('open')) $('#searchInput').focus();
+/* ---------- Search: the bar stays under the header while you scroll; results show in the shop grid ---------- */
+const setHeaderVar = () => document.documentElement.style.setProperty('--hdr', $('.header').offsetHeight + 'px');
+setHeaderVar(); window.addEventListener('resize', setHeaderVar); window.addEventListener('load', setHeaderVar);
+function openSearch() { $('#searchbar').classList.add('open'); $('#searchBtn').classList.add('on'); $('#searchInput').focus(); }
+function closeSearch() { if (query) clearSearch(false); $('#searchbar').classList.remove('open'); $('#searchBtn').classList.remove('on'); }
+function clearSearch(refocus) {
+  query = ''; $('#searchInput').value = '';
+  renderFilters(); renderProducts();
+  if (refocus) $('#searchInput').focus();
+}
+function showResults() {   // bring the shop into view once, not on every key press
+  const r = $('#shop').getBoundingClientRect();
+  if (!(r.top < window.innerHeight * 0.5 && r.bottom > 220)) goTo('#shop');
+}
+function runSearch(jump) {
+  query = $('#searchInput').value.trim();
+  renderFilters(); renderProducts();
+  if (query && jump) showResults();
+}
+let searchTimer;
+$('#searchBtn').addEventListener('click', () => { $('#searchbar').classList.contains('open') ? closeSearch() : openSearch(); });
+$('#searchInput').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(true), 150); });
+$('#searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchTimer); runSearch(false); if (query) goTo('#shop'); e.target.blur(); }   // blur hides the phone keyboard
+  if (e.key === 'Escape') { clearSearch(false); closeSearch(); }
 });
-$('#searchInput').addEventListener('input', e => { query = e.target.value.trim().toLowerCase(); renderProducts(); if (query) goTo('#shop'); });
+$('#searchClear').addEventListener('click', () => clearSearch(true));
+$('#emptyClear').addEventListener('click', () => clearSearch(false));
 
 /* ---------- Cart ---------- */
 function cleanCart() {   // drop items that no longer exist / exceed stock
@@ -194,7 +233,7 @@ function renderCart() {
         <div class="qty"><button data-a="dec" data-id="${p.id}" aria-label="Decrease">&minus;</button><span>${i.qty}</span><button data-a="inc" data-id="${p.id}" aria-label="Increase">+</button></div></div>
       <div class="cl-right"><strong>${money(p.price * i.qty)}</strong><button class="rm" data-a="rm" data-id="${p.id}">Remove</button></div>
     </div>`;
-  }).join('') : '<div class="cl-empty"><p>Your cart is empty.</p><a href="#shop" class="btn">Browse the collection</a></div>';
+  }).join('') : '<div class="cl-empty"><p>Your cart is empty.</p></div>';
   $('#cartSummary').innerHTML = cart.length ? `
     <h3>Order summary</h3>
     <div class="sum-row"><span>Subtotal</span><span>${money(t.subtotal)}</span></div>
@@ -278,6 +317,7 @@ $('#year').textContent = new Date().getFullYear();
   }
   renderFilters(); renderProducts(); renderCart(); spy();
   if (p.get('login') && !state.user) openAuth('login', { reason: 'Please sign in to continue.', next: () => { if (p.get('next') === 'payment') location.href = 'payment.html'; } });
+  if (p.get('search')) openSearch();   // arrived from the "Search" link on another page
   if (location.hash && $(location.hash)) setTimeout(() => goTo(location.hash), 300);
 })();
 

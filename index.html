@@ -33,8 +33,12 @@
   </nav>
 </header>
 
-<div class="searchbar" id="searchbar">
-  <input id="searchInput" type="search" placeholder="Search napkins, placemats, coasters…">
+<div class="searchbar" id="searchbar" role="search">
+  <div class="search-in">
+    <input id="searchInput" type="search" placeholder="Search napkins, placemats, coasters…" autocomplete="off" enterkeyhint="search" aria-label="Search the shop">
+    <button type="button" id="searchClear" aria-label="Clear search" hidden>&times;</button>
+  </div>
+  <p class="search-info" id="searchInfo" aria-live="polite"></p>
 </div>
 
 <main>
@@ -69,7 +73,11 @@
     <button data-filter="coasters">Trays &amp; Coasters</button>
   </div>
   <div class="grid" id="productGrid"></div>
-  <p class="empty" id="emptyMsg" hidden>No pieces match your search.</p>
+  <div class="empty" id="emptyMsg" hidden>
+    <p>No pieces match <strong id="emptyQuery"></strong>.</p>
+    <p class="small">Try another word, for example <em>napkin</em>, <em>placemat</em>, <em>tray</em> or <em>coaster</em>.</p>
+    <button class="btn ghost" type="button" id="emptyClear">Clear search</button>
+  </div>
 </section>
 
 <!-- CART -->

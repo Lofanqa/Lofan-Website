@@ -43,6 +43,10 @@ THEN: ADD COMPANY & BANK DETAILS  (Admin -> Company & Payments)
 HOW A CUSTOMER ORDERS
   1. Adds items to the cart and clicks Checkout.
   2. If not signed in, a pop-up makes them create an account (name, mobile, email, password).
+     The password is mandatory: at least 8 characters with letters AND numbers (a tick-list under the box shows what is
+     still missing; the server checks it too). Existing customers can still sign in with their old password.
+     Search (top bar, next to My Account): finds items by name, category or description - several words, capital
+     letters and plurals all work - and shows the number of matches; it stays visible while you scroll the shop.
   3. payment.html: delivery details -> order is created (stock reserved) -> they pick
      IBAN / Fawran / Ooredoo Money, see your details and a payment reference (e.g. LF-AB12CD),
      pay from their bank app, then enter the transaction number and upload the receipt screenshot.

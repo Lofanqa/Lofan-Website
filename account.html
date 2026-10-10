@@ -35,7 +35,8 @@
       <form id="pwForm" class="co-col" novalidate>
         <h3>Change password</h3>
         <label>Current password<input type="password" name="current" autocomplete="current-password" required></label>
-        <label>New password (min. 6 characters)<input type="password" name="new" autocomplete="new-password" required></label>
+        <label>New password<input type="password" name="new" autocomplete="new-password" required>
+          <ul class="pw-rules" data-pw-rules aria-live="polite"><li data-r="len">8 or more characters</li><li data-r="letter">a letter</li><li data-r="num">a number</li></ul></label>
         <button class="btn" type="submit">Update Password</button><p class="note" id="pwNote"></p>
       </form>
     </div>
