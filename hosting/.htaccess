@@ -69,4 +69,8 @@ AddDefaultCharset UTF-8
   <FilesMatch "\.html$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
+  # The admin page is never kept by the browser, so the Back button cannot show a dashboard after "Log out"
+  <FilesMatch "^admin\.html$">
+    Header set Cache-Control "no-store, no-cache, must-revalidate"
+  </FilesMatch>
 </IfModule>

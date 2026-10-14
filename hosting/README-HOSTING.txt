@@ -142,6 +142,10 @@ STEP 7  Share it
        "Sign out all other devices". Staff sign-ins expire after 7 days. Changing a password signs out the other devices.
      - Access & activity log: every sign-in, failed / blocked sign-in and important change (order status, products,
        settings, deletions, resets, WhatsApp alerts sent...) with admin name, time, IP and device. Search, filter by admin, Export CSV.
+  Admin sign-ins end when the browser is closed and after 12 hours; customers stay signed in for 30 days (Log out button
+  in the top bar). New passwords (customers and admins) need 8+ characters with letters AND numbers.
+  Deleting an order: the owner deletes directly; staff press "Request deletion", the owner approves in Admin > Orders, and
+  then the staff member can delete that one order (approval valid 24 hours). All steps appear in the activity log.
   Admin passwords are stored encrypted (bcrypt). After 10 wrong attempts within 10 minutes the sign-in pauses for a few
   minutes (and the attempt is logged).
   Give each person their own account (for example chairman = Owner, two staff). Never share one password.

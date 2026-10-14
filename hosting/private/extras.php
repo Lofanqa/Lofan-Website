@@ -208,6 +208,45 @@ function send_queued_alerts()
     }
 }
 
+/* ------------------------------------------------------------------ deleting one order (owner, or staff with the owner's approval) */
+const DELETE_APPROVAL_HOURS = 24;       // an approval is valid for this long, and for ONE deletion
+function purge_order($r)
+{
+    if (in_array($r['status'], ['Awaiting payment', 'Payment submitted'], true)) restore_stock($r);   // reserved items go back to the shop
+    if (!empty($r['receipt'])) @unlink(receipts_dir() . '/' . basename($r['receipt']));
+    q_exec('DELETE FROM order_events WHERE order_id=?', [$r['id']]);
+    q_exec("DELETE FROM notifications WHERE ref=? AND kind IN ('order','payment')", [$r['id']]);
+    q_exec('DELETE FROM orders WHERE id=?', [$r['id']]);
+}
+
+/* ------------------------------------------------------------------ automatic chat replies */
+function customer_order_text($o)
+{
+    $label = ['Awaiting payment' => 'Not confirmed yet - waiting for your payment', 'Payment submitted' => 'We are verifying your payment',
+        'Payment confirmed' => 'Order confirmed', 'Preparing' => 'Being prepared', 'Out for delivery' => 'Out for delivery',
+        'Delivered' => 'Delivered', 'Cancelled' => 'Cancelled'];
+    return 'Order ' . $o['id'] . ': ' . ($label[$o['status']] ?? $o['status']) . '. Total ' . (int)$o['total'] . ' QAR.';
+}
+/* Texts of the automatic replies to a customer message (the message is already saved). Returns a list of strings. */
+function chat_auto_texts($u, $text, $prevAdminAt)
+{
+    $c = get_settings()['chat'];
+    if (empty($c['autoReply'])) return [];
+    $help = clean($c['orderHelp'], 400);
+    $lastHelpAt = $help === '' ? 0 : (int)q_val('SELECT MAX(created) FROM messages WHERE user_id=? AND auto=1 AND body=?', [(int)$u['id'], $help]);   // do not repeat the hint within 30 minutes
+    $out = [];
+    if ($prevAdminAt === 0 || now() - $prevAdminAt > 24 * 3600) $out[] = clean($c['welcome'], 700);     // first message, or back after a day
+    $isLoc = strpos($text, '[loc:') === 0;
+    if (!$isLoc && preg_match('/\bLF-[A-Z0-9]{6}\b/', strtoupper($text), $mm)) {
+        $o = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$mm[0], (int)$u['id']]);
+        $out[] = $o ? customer_order_text($o) . ' Our team will update you here if anything changes.'
+                    : 'We could not find ' . $mm[0] . ' on your account. Please check the number in My Account > My Orders.';
+    } elseif (!$isLoc && preg_match('/\b(order|track|tracking|delivery|deliver|shipping|status|payment|paid)\b/i', $text) && now() - $lastHelpAt > 1800) {
+        $out[] = $help;
+    }
+    return array_values(array_filter($out, function ($t) { return $t !== ''; }));
+}
+
 /* ------------------------------------------------------------------ reset test data (owner only) */
 function reset_data($o)
 {

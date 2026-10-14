@@ -22,7 +22,8 @@ function handle_api($method, $route, $body)
         foreach ($rows as $r) {
             $loc = null;
             if (preg_match('/^\[loc:(-?\d+\.\d+),(-?\d+\.\d+)\]$/D', (string)$r['body'], $mm)) $loc = ['lat' => (float)$mm[1], 'lng' => (float)$mm[2]];
-            $out[] = ['id' => (int)$r['id'], 'sender' => $r['sender'], 'body' => $loc ? '' : $r['body'], 'created' => (int)$r['created'], 'loc' => $loc];
+            $out[] = ['id' => (int)$r['id'], 'sender' => $r['sender'], 'body' => $loc ? '' : $r['body'], 'created' => (int)$r['created'], 'loc' => $loc,
+                'auto' => !empty($r['auto'])];
         }
         return $out;
     };
@@ -95,8 +96,9 @@ function handle_api($method, $route, $body)
     }
 
     if ($R('GET', 'config')) {
-        $co = get_settings()['company'];
-        return [200, ['googleClientId' => google_client_id(), 'whatsapp' => $co['whatsapp'], 'phone' => $co['phone']]];
+        $st = get_settings(); $co = $st['company'];
+        return [200, ['googleClientId' => google_client_id(), 'whatsapp' => $co['whatsapp'], 'phone' => $co['phone'],
+            'shipping' => ['fee' => (int)$st['shipping']['fee'], 'freeFrom' => (int)$st['shipping']['freeFrom']]]];
     }
 
     if ($R('POST', 'google')) {
@@ -343,8 +345,12 @@ function handle_api($method, $route, $body)
         }
         if ($text === '') throw new ApiError(400, 'Type a message first.');
         throttle('chat' . $u['id'], 40, 60);
+        $prevAdminAt = (int)q_val("SELECT MAX(created) FROM messages WHERE user_id=? AND sender='admin'", [(int)$u['id']]);
         $id = q_insert('INSERT INTO messages(user_id,sender,body,created) VALUES(?,?,?,?)', [(int)$u['id'], 'customer', $text, now()]);
         notify('chat', 'Message from ' . $u['name'], $loc ? '📍 Shared their location' : slice($text, 140), (string)$u['id']);
+        foreach (chat_auto_texts($u, $text, $prevAdminAt) as $auto) {   // welcome / order-query replies from Lofan
+            q_insert('INSERT INTO messages(user_id,sender,body,created,seen,auto) VALUES(?,?,?,?,0,1)', [(int)$u['id'], 'admin', $auto, now()]);
+        }
         return [200, ['message' => $one_msg($id)]];
     }
 
@@ -370,6 +376,49 @@ function handle_api($method, $route, $body)
         add_event($oid, $new, clean($d['note'] ?? '', 200));
         log_admin('order.status', "$oid: {$r['status']} -> $new" . (clean($d['note'] ?? '', 80) !== '' ? ' (' . clean($d['note'], 80) . ')' : ''));
         if ($new === 'Payment confirmed' && $r['status'] !== 'Payment confirmed') queue_alert('confirmed', $oid);   // the order is only CONFIRMED after the payment is verified
+        return [200, ['order' => order_out(order_by_id($oid), true)]];
+    }
+
+    /* ----- deleting an order: the owner can always do it; staff need the owner's approval first ----- */
+    if ($R('DELETE', 'admin/orders/(LF-[A-Z0-9]{6})')) {
+        $me = need_admin(); $oid = $m[1];
+        $r = order_by_id($oid);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        $how = 'by the owner';
+        if (!is_owner($me)) {
+            $ok = $r['del_state'] === 'approved' && now() - (int)$r['del_decided_at'] <= DELETE_APPROVAL_HOURS * 3600;
+            if (!$ok) throw new ApiError(403, 'Only the owner can delete an order. Ask the owner for approval first (Request deletion).');
+            $how = 'with approval of ' . $r['del_decided_by'];
+        }
+        $d = json_decode($r['delivery'], true) ?: [];
+        purge_order($r);
+        log_admin('order.delete', "Deleted order $oid (" . str_val($d['name'] ?? '') . ', ' . (int)$r['total'] . ' ' . CURRENCY . ', was "' . $r['status'] . '") ' . $how);
+        return [200, ['ok' => true]];
+    }
+    if ($R('POST', 'admin/orders/(LF-[A-Z0-9]{6})/delete-request')) {
+        $me = need_admin(); $oid = $m[1]; $d = $json();
+        $r = order_by_id($oid);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        if (is_owner($me)) throw new ApiError(400, 'You are an owner - you can delete this order directly.');
+        if ($r['del_state'] === 'pending') throw new ApiError(409, 'A deletion request for this order is already waiting for the owner.');
+        if ($r['del_state'] === 'approved' && now() - (int)$r['del_decided_at'] <= DELETE_APPROVAL_HOURS * 3600) throw new ApiError(409, 'The owner already approved this - you can delete the order now.');
+        $reason = clean($d['reason'] ?? '', 300);
+        if (slen($reason) < 3) throw new ApiError(400, 'Please write why this order should be deleted.');
+        q_exec("UPDATE orders SET del_state='pending',del_by=?,del_reason=?,del_at=?,del_decided_by=NULL,del_decided_at=NULL WHERE id=?", [$me['name'], $reason, now(), $oid]);
+        $dd = json_decode($r['delivery'], true) ?: [];
+        notify('order', "Deletion request - $oid", $me['name'] . ' asks to delete this order (' . str_val($dd['name'] ?? '') . ', ' . (int)$r['total'] . ' ' . CURRENCY . '): ' . $reason, $oid);
+        log_admin('order.delete_request', "$oid: requested by " . $me['name'] . ' - ' . $reason);
+        return [200, ['order' => order_out(order_by_id($oid), true)]];
+    }
+    if ($R('POST', 'admin/orders/(LF-[A-Z0-9]{6})/delete-decision')) {
+        $me = need_owner(); $oid = $m[1]; $d = $json();
+        $r = order_by_id($oid);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        if ($r['del_state'] !== 'pending') throw new ApiError(409, 'There is no deletion request waiting for this order.');
+        $yes = !empty($d['approve']);
+        q_exec('UPDATE orders SET del_state=?,del_decided_by=?,del_decided_at=? WHERE id=?', [$yes ? 'approved' : 'rejected', $me['name'], now(), $oid]);
+        notify('order', ($yes ? 'Deletion approved' : 'Deletion rejected') . " - $oid", $me['name'] . ($yes ? ' approved the deletion requested by ' : ' rejected the deletion requested by ') . $r['del_by'] . '.', $oid);
+        log_admin($yes ? 'order.delete_approve' : 'order.delete_reject', "$oid: " . ($yes ? 'approved' : 'rejected') . ' (requested by ' . $r['del_by'] . ')');
         return [200, ['order' => order_out(order_by_id($oid), true)]];
     }
 
@@ -592,6 +641,16 @@ function handle_api($method, $route, $body)
                 if (!is_numeric($oi['unpaidHours']) || $oi['unpaidHours'] < 0 || $oi['unpaidHours'] > 720) throw new ApiError(400, 'Release unpaid orders after 0 to 720 hours (0 = never).');
                 $s['orders']['unpaidHours'] = (int)$oi['unpaidHours'];
             }
+        }
+        if (array_key_exists('chat', $d) && is_array($d['chat'])) {          // automatic chat replies
+            $ch = $d['chat'];
+            if (array_key_exists('autoReply', $ch)) $s['chat']['autoReply'] = (bool)$ch['autoReply'];
+            if (array_key_exists('welcome', $ch)) {
+                $w = clean($ch['welcome'], 700);
+                if ($w === '') throw new ApiError(400, 'The welcome message cannot be empty (switch automatic replies off instead).');
+                $s['chat']['welcome'] = $w;
+            }
+            if (array_key_exists('orderHelp', $ch)) $s['chat']['orderHelp'] = clean($ch['orderHelp'], 400);
         }
         if (array_key_exists('alerts', $d) && is_array($d['alerts'])) {
             $al = $d['alerts'];

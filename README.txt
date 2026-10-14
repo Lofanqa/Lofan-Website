@@ -136,6 +136,33 @@ CUSTOMER LOCATION -> GOOGLE MAPS
     you are) and a small map. Uses normal Google Maps links, no API key needed.
   - Location sharing only works on https:// (or localhost), so your live site needs HTTPS.
 
+SIGNING IN AND OUT
+  - While somebody is signed in, the top bar shows "Hi, <name>" and a "Log out" button on every page (admins see "Admin").
+  - Customers stay signed in for 30 days unless they press Log out. Admin / staff sign-ins end when the browser is closed
+    and after 12 hours at the latest. The dashboard (admin.html) opens only for a signed-in admin; after Log out it asks
+    for the admin sign-in again, even with the Back button.
+
+FREE SHIPPING RULE (Admin > Company & Payments > Delivery fee / Free delivery from)
+  - Items of this amount or more ship free; below it the delivery fee is added. Example: fee 25, free from 250.
+  - Change the numbers any time: the shop, cart, top bar text and every new order use the new values at once.
+
+DELETING AN ORDER (Admin > Orders)
+  - Owner: "Delete order" on each order (asks to confirm). Unpaid orders put their items back in stock; paid orders do not.
+  - Staff: "Request deletion" (with a reason). The owner gets a notification, a banner on the Orders tab and
+    "Approve deletion" / "Reject" buttons on the order. After approval the staff member can delete that order
+    (valid for 24 hours, one time). Every step is written to the activity log (Admin > Security).
+
+CHAT: BADGES, WELCOME MESSAGE, VISITORS WITHOUT AN ACCOUNT
+  - The chat button shows a red number (and pulses) when the Lofan team wrote to the customer; the browser tab title
+    shows (n) too. Admins see the same on the Chat tab and in pop-ups.
+  - Automatic welcome: when a signed-in customer writes for the first time (or again after a day) Lofan answers with the
+    welcome message. If they send an order number (LF-XXXXXX) they get that order's status; an order question without a
+    number gets a short hint. Automatic messages are marked "auto reply" in the admin chat.
+  - WHERE TO CHANGE THE TEXT: in VS Code open hosting/private/lib.php and search for  'welcome'  (section 'chat').
+    The same texts can be edited in Admin > Company & Payments > "Automatic chat reply" (a saved admin text wins).
+  - A visitor without an account who tries to chat sees "Create an account and chat with us" and the "My Account"
+    button in the top bar blinks.
+
 ADMIN EXTRAS
   - Overview tab: payments to verify, orders today, revenue, new customers, unread chats, sold-out items, 7-day chart,
     low-stock list. Click a tile to jump to that list.

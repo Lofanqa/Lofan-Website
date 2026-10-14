@@ -311,7 +311,7 @@ $('#year').textContent = new Date().getFullYear();
       $('#cAddr').textContent = c.address;
       if (c.whatsapp) $('#cWa').href = 'https://wa.me/' + c.whatsapp + '?text=' + encodeURIComponent('Hello Lofan, I would like to ask about your products.'); else $('#cWa').hidden = true;
     }
-    $$('#shipNoteTop').forEach(e => { e.textContent = `Free shipping on orders above ${SHIPPING.freeFrom} QAR`; });
+    $$('#shipNoteTop').forEach(e => { e.textContent = shipNote(SHIPPING.freeFrom); });
   } catch {   // server not running: still show the whole catalogue (browse only)
     OFFLINE = true; PRODUCTS = FALLBACK.products; CATS = FALLBACK.cats; showServerDown();
   }

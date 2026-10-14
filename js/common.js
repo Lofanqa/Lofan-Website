@@ -112,8 +112,20 @@ async function loadUser() {
 function updateAccountBtn() {
   const b = $('#accountBtn'); if (!b) return;
   b.textContent = state.user ? (state.user.role === 'admin' ? 'Admin' : 'Hi, ' + state.user.name.split(' ')[0]) : 'My Account';
+  const out = $('#topLogout'), sep = $('#topLogoutSep');       // a Log out button is always there while somebody is signed in
+  if (out) out.hidden = !state.user;
+  if (sep) sep.hidden = !state.user;
 }
+/* Makes "My Account" in the top bar blink so the visitor sees where to create an account. */
+function blinkAccount() {
+  const b = $('#accountBtn'); if (!b) return;
+  if (window.scrollY > 40) window.scrollTo({ top: 0, behavior: 'smooth' });
+  b.classList.remove('blink'); void b.offsetWidth; b.classList.add('blink');
+  clearTimeout(blinkAccount.t); blinkAccount.t = setTimeout(() => b.classList.remove('blink'), 7000);
+}
+const shipNote = n => (n > 0 ? `Free shipping on orders of ${n} QAR or more` : 'Free shipping on all orders');
 function bindAccountBtn() {
+  const lo = $('#topLogout'); if (lo) lo.addEventListener('click', logout);
   const b = $('#accountBtn'); if (!b) return;
   b.addEventListener('click', () => {
     if (state.user) location.href = state.user.role === 'admin' ? 'admin.html' : 'account.html';
@@ -187,6 +199,7 @@ async function loadConfig() {
   try {
     const c = await api('/config');
     state.googleId = c.googleClientId || ''; state.whatsapp = c.whatsapp || ''; state.companyPhone = c.phone || '';
+    if (c.shipping) { const n = $('#shipNoteTop'); if (n) n.textContent = shipNote(c.shipping.freeFrom); }   // same number on every page
   } catch { state.googleId = ''; }
 }
 async function mountGoogle() {
@@ -257,8 +270,8 @@ async function logout() {
 function renderChrome() {
   const el = $('#chrome'); if (!el) return;
   el.innerHTML = `
-  <div class="topbar"><span></span><p>Free shipping on orders above 300 QAR</p>
-    <nav><button id="accountBtn">My Account</button><i>|</i><a href="index.html?search=1">Search</a><i>|</i><a href="index.html#cart">Cart (<span id="cartCount">0</span>)</a></nav></div>
+  <div class="topbar"><span></span><p id="shipNoteTop">Free shipping on larger orders</p>
+    <nav><button id="accountBtn">My Account</button><i id="topLogoutSep" hidden>|</i><button id="topLogout" hidden>Log out</button><i>|</i><a href="index.html?search=1">Search</a><i>|</i><a href="index.html#cart">Cart (<span id="cartCount">0</span>)</a></nav></div>
   <header class="header">
     <button class="burger" id="burger" aria-label="Menu"><span></span><span></span><span></span></button>
     <nav class="nav nav-left"><a href="index.html">Home</a><a href="index.html#shop">Shop</a><a href="index.html#about">About</a></nav>
@@ -288,7 +301,8 @@ function initChat() {
   $('#chatClose').addEventListener('click', closeChat);
   $('#chatForm').addEventListener('submit', sendChat);
   $('#chatLoc').addEventListener('click', shareLocationInChat);
-  setInterval(pollUnread, 15000); setTimeout(pollUnread, 1500);
+  setInterval(pollUnread, 6000); setTimeout(pollUnread, 1200);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollUnread(); });
 }
 function chatBubble(m) {
   const mine = m.sender === 'customer';
@@ -296,6 +310,7 @@ function chatBubble(m) {
   return `<div class="msg ${mine ? 'me' : 'them'}"><p>${esc(m.body)}</p><small>${hhmm(m.created)}</small></div>`;
 }
 async function shareLocationInChat() {
+  if (!state.user) { guestSend('📍 My current location'); return; }
   const b = $('#chatLoc'); b.disabled = true; toast('Finding your location…');
   try {
     const loc = await getLocation();
@@ -313,16 +328,35 @@ function addMessages(list) {
   if (stick) body.scrollTop = body.scrollHeight;
 }
 async function openChat(prefill = '') {
-  if (!state.user) { openAuth('login', { reason: 'Please sign in to chat with us. (Prefer WhatsApp? Use the WhatsApp button in the Contact section.)', next: () => openChat(prefill) }); return; }
-  if (state.user.role === 'admin') { toast('Use the admin dashboard to chat with customers.'); return; }
+  if (state.user && state.user.role === 'admin') { toast('Use the admin dashboard to chat with customers.'); return; }
+  const guest = !state.user;
   $('#chatPanel').hidden = false; $('#chatFab').hidden = true; Chat.shown = true; Chat.last = 0;
-  $('#chatBody').innerHTML = '<p class="chat-empty">Hello! 👋 How can we help you today? Ask about products, custom orders or your delivery.</p>';
+  $('#chatPanel').classList.toggle('guest', guest);
   const wa = $('#chatWa'); if (state.whatsapp) { wa.hidden = false; wa.href = `https://wa.me/${state.whatsapp}?text=${encodeURIComponent('Hello Lofan, I have a question.')}`; }
   if (prefill) $('#chatInput').value = prefill;
+  if (guest) { showGuestChat(); return; }
+  $('#chatBody').innerHTML = '<p class="chat-empty">Hello! 👋 How can we help you today? Ask about products, custom orders or your delivery.</p>';
   await loadChat(); $('#chatInput').focus();
   clearInterval(Chat.timer); Chat.timer = setInterval(loadChat, 4000);
 }
-function closeChat() { $('#chatPanel').hidden = true; $('#chatFab').hidden = false; Chat.shown = false; clearInterval(Chat.timer); }
+function closeChat() { $('#chatPanel').hidden = true; $('#chatFab').hidden = false; Chat.shown = false; clearInterval(Chat.timer); setTimeout(pollUnread, 300); }
+
+/* Visitors without an account: invite them to create one (the chat needs an account so we can reply and follow their orders). */
+function showGuestChat() {
+  $('#chatBody').innerHTML = `
+    <div class="msg them"><p>Hi, welcome to Lofan! 👋 Please <strong>create an account and chat with us</strong> – it only takes a minute, then we can answer you and help with your orders.</p></div>
+    <div class="chat-cta"><button class="btn" id="chatCreate" type="button">Create account</button><button class="btn ghost" id="chatSignin" type="button">Sign in</button></div>`;
+  const after = () => { closeChat(); openChat(Chat.pending || ''); Chat.pending = ''; };
+  $('#chatCreate').addEventListener('click', () => { blinkAccount(); openAuth('register', { reason: 'Create an account and chat with us.', next: after }); });
+  $('#chatSignin').addEventListener('click', () => openAuth('login', { reason: 'Sign in to chat with us.', next: after }));
+}
+function guestSend(text) {
+  const b = $('#chatBody');
+  b.insertAdjacentHTML('beforeend', `<div class="msg me"><p>${esc(text)}</p></div>
+    <div class="msg them"><p>Please <strong>create an account</strong> to send your message – then we can reply to you and follow your orders. 💚</p></div>`);
+  b.scrollTop = b.scrollHeight; Chat.pending = text; blinkAccount();
+  const c = $('#chatCreate'); if (c) c.classList.add('attention');
+}
 async function loadChat() {
   try { const d = await api(`/chat?after=${Chat.last}&open=1`); addMessages(d.messages); $('#chatBadge').hidden = true; } catch { /* offline */ }
 }
@@ -330,16 +364,23 @@ async function sendChat(e) {
   e.preventDefault();
   const input = $('#chatInput'), body = input.value.trim(); if (!body) return;
   input.value = '';
+  if (!state.user) { guestSend(body); return; }
   try { const r = await api('/chat', { method: 'POST', body: { body } }); addMessages([r.message]); }
   catch (err) { input.value = body; toast(err.message); }
 }
-async function pollUnread() {
-  if (!state.user || state.user.role === 'admin' || Chat.shown) { if (!state.user || state.user.role === 'admin') { const b = $('#chatBadge'); if (b) b.hidden = true; } return; }
-  try { const { unread } = await api('/chat/unread'); const b = $('#chatBadge'); b.hidden = !unread; b.textContent = unread; } catch { /* ignore */ }
+const BASE_TITLE = document.title;
+async function pollUnread() {   // red number on the chat button when the Lofan team has written to this customer
+  const b = $('#chatBadge'), fab = $('#chatFab'); if (!b || !fab) return;
+  const paint = n => {
+    b.hidden = !n; b.textContent = n > 9 ? '9+' : n; fab.classList.toggle('has-unread', n > 0);
+    document.title = (n ? `(${n}) ` : '') + BASE_TITLE;
+  };
+  if (!state.user || state.user.role === 'admin' || Chat.shown) { paint(0); return; }
+  try { const { unread } = await api('/chat/unread'); paint(unread); } catch { /* ignore */ }
 }
 document.addEventListener('click', e => {   // "Message us about this order" style buttons anywhere
   const b = e.target.closest('[data-open-chat]'); if (b) openChat(b.dataset.openChat);
 });
 
-document.addEventListener('DOMContentLoaded', () => { renderChrome(); ensureModal(); bindAccountBtn(); updateCartCount(); loadConfig(); initChat(); });
+document.addEventListener('DOMContentLoaded', () => { renderChrome(); ensureModal(); bindAccountBtn(); updateAccountBtn(); updateCartCount(); loadConfig(); initChat(); });
 

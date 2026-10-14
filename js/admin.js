@@ -13,6 +13,9 @@ const ibanOk = s => {
   let r = 0; for (const ch of n) r = (r * 10 + +ch) % 97; return r === 1;
 };
 
+/* After "Log out" the Back button must never show a cached dashboard: re-check the sign-in whenever the page is restored. */
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
+
 /* ---------- login / first-time setup ---------- */
 async function gate() {
   await loadUser();
@@ -193,7 +196,7 @@ function orderCard(o) {
       ${o.method ? `<p class="small pay-line">Payment: <strong>${esc(o.method)}</strong> · transaction ref <strong>${esc(o.txn)}</strong> ${o.hasReceipt ? `· <a class="ulink" target="_blank" href="/api/admin/receipt/${o.id}">view receipt</a>` : ''}</p>` : '<p class="muted small">No payment submitted yet.</p>'}
       <div class="ord-contact">
         ${o.user_id ? `<button class="btn ghost" data-chat="${o.user_id}">Chat on website</button>` : ''}
-        <a class="btn ghost" target="_blank" rel="noopener" href="${waLink(dl.phone, `Hello ${dl.name}, this is Lofan regarding your order ${o.id}.`)}">WhatsApp</a>
+        <a class="btn ghost" target="_blank" rel="noopener" href="${waLink(dl.phone, `Hello ${dl.name}, 🏡✨ Welcome to LOFAN – Home Accessories! ✨.`)}">WhatsApp</a>
         <button class="btn ghost" data-print="${o.id}">Print invoice</button>
       </div>
       <div class="ord-actions">
@@ -202,12 +205,48 @@ function orderCard(o) {
         <button class="btn" data-upd="${o.id}">Update</button>
         ${o.status === 'Payment submitted' ? `<button class="btn ghost" data-confirm="${o.id}">Confirm payment</button>` : ''}
       </div>
+      ${deleteBox(o)}
       <details><summary>History</summary><ul class="events">${o.events.slice().reverse().map(ev => `<li><strong>${esc(ev.status)}</strong>${ev.note ? ' – ' + esc(ev.note) : ''}<small>${fmtDate(ev.created)}</small></li>`).join('')}</ul></details>
     </article>`;
 }
+/* Deleting an order: the owner can always delete; staff ask the owner first and can delete only after the approval. */
+const APPROVAL_SECONDS = 24 * 3600;
+function deleteBox(o) {
+  const r = o.deleteRequest, owner = isOwner(), now = Date.now() / 1000;
+  const approved = r && r.state === 'approved' && now - r.decidedAt <= APPROVAL_SECONDS;
+  const when = t => `<small class="muted">(${fmtDate(t)})</small>`;
+  if (owner) {
+    if (r && r.state === 'pending') return `<div class="del-box">🗑 <strong>${esc(r.by)}</strong> asks to delete this order: “${esc(r.reason)}” ${when(r.at)}
+      <div class="ord-actions"><button class="btn danger" data-delapprove="${o.id}">Approve deletion</button><button class="btn ghost" data-delreject="${o.id}">Reject</button>
+      <button class="btn ghost danger-text" data-delorder="${o.id}">Delete now</button></div></div>`;
+    return `<div class="ord-actions"><button class="btn ghost danger-text" data-delorder="${o.id}">Delete order</button>${approved ? `<small class="muted">Approved for ${esc(r.by)} by ${esc(r.decidedBy)}</small>` : ''}</div>`;
+  }
+  if (r && r.state === 'pending') return `<div class="del-box">⏳ Deletion requested – waiting for the owner's approval. ${when(r.at)}</div>`;
+  if (approved) return `<div class="del-box ok">✅ Approved by <strong>${esc(r.decidedBy)}</strong>. You can delete this order now.
+    <div class="ord-actions"><button class="btn danger" data-delorder="${o.id}">Delete order</button></div></div>`;
+  const rejected = r && r.state === 'rejected' ? `<div class="del-box no">❌ The owner (${esc(r.decidedBy)}) rejected the deletion request. ${when(r.decidedAt)}</div>` : '';
+  return rejected + `<div class="ord-actions"><button class="btn ghost danger-text" data-reqdel="${o.id}">Request deletion</button><small class="muted">Staff accounts need the owner's approval to delete an order.</small></div>`;
+}
+function askDeleteReason(id) {
+  Modal.open(`<h2>Request <em>deletion</em></h2>
+    <p class="gate-note">Only the owner can delete an order. Tell the owner why order <strong>${esc(id)}</strong> should be deleted – they will approve or reject it.</p>
+    <form id="delReqForm" novalidate>
+      <label>Reason<textarea name="reason" rows="3" maxlength="300" placeholder="e.g. test order / duplicate / customer cancelled" required></textarea></label>
+      <button class="btn full" type="submit">Send request to the owner</button><p class="note" id="delReqNote"></p>
+    </form>`);
+  $('#delReqForm').addEventListener('submit', async e => {
+    e.preventDefault(); const note = $('#delReqNote'); note.className = 'note';
+    try {
+      await api(`/admin/orders/${id}/delete-request`, { method: 'POST', body: { reason: new FormData(e.target).get('reason') } });
+      Modal.close(); toast('Request sent to the owner'); renderOrders();
+    } catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+}
+let delOnly = false;
 function drawOrderList() {
   const q = orderSearch.trim().toLowerCase();
-  const list = ordersData.orders.filter(o => !q || [o.id, o.delivery.name, o.delivery.phone, o.delivery.email, o.delivery.address, o.method, o.txn].join(' ').toLowerCase().includes(q));
+  const list = ordersData.orders.filter(o => (!delOnly || (o.deleteRequest && o.deleteRequest.state === 'pending'))
+    && (!q || [o.id, o.delivery.name, o.delivery.phone, o.delivery.email, o.delivery.address, o.method, o.txn].join(' ').toLowerCase().includes(q)));
   $('#ordCount').textContent = `${list.length} order${list.length === 1 ? '' : 's'}`;
   $('#orderList').innerHTML = list.length ? list.map(orderCard).join('') : '<p class="muted">No orders found.</p>';
 }
@@ -221,6 +260,10 @@ async function renderOrders(keep) {
     <div class="adm-btns"><input id="orderSearch" type="search" placeholder="Search order no., name, phone…" value="${esc(orderSearch)}">
       <select id="orderFilter"><option value="">All statuses</option>${d.statuses.map(s => `<option ${s === orderFilter ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <button class="btn ghost" data-export="orders">Export CSV</button></div></div>
+    ${(() => {
+      const n = isOwner() ? d.orders.filter(o => o.deleteRequest && o.deleteRequest.state === 'pending').length : 0;
+      return n ? `<div class="del-box del-banner">🗑 <strong>${n} deletion request${n === 1 ? '' : 's'}</strong> waiting for your approval. <button class="rm" id="delOnly">${delOnly ? 'Show all orders' : 'Show only these'}</button></div>` : '';
+    })()}
     <div id="orderList"></div>`);
   drawOrderList();
   $('#orderFilter').addEventListener('change', e => { orderFilter = e.target.value; renderOrders(); });
@@ -234,6 +277,21 @@ async function renderOrders(keep) {
         .concat(ordersData.orders.map(o => [o.id, new Date(o.created * 1000).toLocaleString(), o.status, o.total, o.method || '', o.txn || '', o.delivery.name, '+' + o.delivery.phone, o.delivery.email, o.delivery.address, o.delivery.lat ?? '', o.delivery.lng ?? '', o.items.map(i => `${i.name} x${i.qty}`).join('; ')]))));
       return;
     }
+    try {
+      if (t.dataset.reqdel) { askDeleteReason(t.dataset.reqdel); return; }
+      if (t.dataset.delorder) {
+        const o = ordersData.orders.find(x => x.id === t.dataset.delorder);
+        const unpaid = o && ['Awaiting payment', 'Payment submitted'].includes(o.status);
+        if (!confirm(`Delete order ${t.dataset.delorder} permanently?\n\n${o ? o.delivery.name + ' · ' + money(o.total) + ' · ' + o.status + '\n\n' : ''}It disappears from the dashboard and from the customer's My Orders${unpaid ? ', and its items go back into stock' : ''}. This cannot be undone.`)) return;
+        await api('/admin/orders/' + t.dataset.delorder, { method: 'DELETE' }); toast('Order deleted'); renderOrders(); return;
+      }
+      if (t.dataset.delapprove || t.dataset.delreject) {
+        const oid = t.dataset.delapprove || t.dataset.delreject, yes = !!t.dataset.delapprove;
+        await api(`/admin/orders/${oid}/delete-decision`, { method: 'POST', body: { approve: yes } });
+        toast(yes ? 'Approved – the staff member can now delete it' : 'Request rejected'); renderOrders(); return;
+      }
+      if (t.id === 'delOnly') { delOnly = !delOnly; drawOrderList(); t.textContent = delOnly ? 'Show all orders' : 'Show only these'; return; }
+    } catch (err) { toast(err.message); return; }
     const id = t.dataset.upd || t.dataset.confirm; if (!id) return;
     const card = t.closest('.ord');
     const status = t.dataset.confirm ? 'Payment confirmed' : $('[data-st]', card).value;
@@ -390,7 +448,7 @@ function customerCard(c) {
       <p class="small"><strong>${c.orders}</strong> order${c.orders === 1 ? '' : 's'}${c.openOrders ? ` (<b>${c.openOrders}</b> in progress)` : ''} · <strong>${money(c.spent)}</strong> spent</p>
       <div class="ord-contact">
         <button class="btn ghost" data-chat="${c.id}">Chat on website</button>
-        ${c.phone ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(c.phone, `Hello ${c.name}, this is Lofan.`)}">WhatsApp</a>` : ''}
+        ${c.phone ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(c.phone, `Hello ${c.name}, 🏡✨ Welcome to LOFAN – Home Accessories! ✨.`)}">WhatsApp</a>` : ''}
         ${isOwner() ? `<button class="btn ghost danger-text" data-delcust="${c.id}">Delete customer</button>` : ''}
       </div>
     </article>`;
@@ -443,7 +501,7 @@ let chatUid = null, chatLast = 0;
 const msgX = m => `<button class="msg-x" data-delmsg="${m.id}" title="Delete this message" aria-label="Delete this message">&times;</button>`;
 const bubble = m => m.loc
   ? `<div class="msg ${m.sender === 'admin' ? 'me' : 'them'} loc" data-mid="${m.id}">${msgX(m)}<p>📍 Shared location</p><a href="${mapsLink(m.loc.lat, m.loc.lng)}" target="_blank" rel="noopener">Open in Google Maps</a> <a class="btn small" href="${dirLink(m.loc.lat, m.loc.lng)}" target="_blank" rel="noopener">Get directions</a><small>${fmtDate(m.created)}</small></div>`
-  : `<div class="msg ${m.sender === 'admin' ? 'me' : 'them'}" data-mid="${m.id}">${msgX(m)}<p>${esc(m.body)}</p><small>${fmtDate(m.created)}</small></div>`;
+  : `<div class="msg ${m.sender === 'admin' ? 'me' : 'them'}" data-mid="${m.id}">${msgX(m)}<p>${esc(m.body)}</p><small>${fmtDate(m.created)}${m.auto ? ' · auto reply' : ''}</small></div>`;
 async function renderChats() {
   const { threads } = await api('/admin/chats');
   panel(`<div class="chat-admin">
@@ -467,7 +525,7 @@ async function openThread(uid) {
     if (!$('#chatPane')) { await renderChats(); return; }
     $('#chatPane').innerHTML = `
       <div class="chat-head"><div><strong>${esc(c.name)}</strong><small class="muted"> ${c.phone ? '+' + esc(c.phone) : ''} ${esc(c.email)}</small></div>
-        <span class="chat-head-btns">${c.lat != null ? `<a class="btn ghost" target="_blank" rel="noopener" href="${dirLink(c.lat, c.lng)}">📍 Directions</a>` : ''}${c.phone ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(c.phone, `Hello ${c.name}, this is Lofan.`)}">Open WhatsApp</a>` : ''}<button class="btn ghost danger-text" data-clearchat="${c.id}">Clear chat</button></span></div>
+        <span class="chat-head-btns">${c.lat != null ? `<a class="btn ghost" target="_blank" rel="noopener" href="${dirLink(c.lat, c.lng)}">📍 Directions</a>` : ''}${c.phone ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(c.phone, `Hello ${c.name}, 🏡✨ Welcome to LOFAN – Home Accessories! ✨.`)}">Open WhatsApp</a>` : ''}<button class="btn ghost danger-text" data-clearchat="${c.id}">Clear chat</button></span></div>
       <div class="chat-body" id="adminChatBody">${d.messages.length ? d.messages.map(bubble).join('') : '<p class="chat-empty">No messages yet. Say hello below.</p>'}</div>
       <form id="adminChatForm"><input id="adminChatInput" placeholder="Reply to ${esc(c.name.split(' ')[0])}…" autocomplete="off" maxlength="1000"><button class="btn" type="submit">Send</button></form>`;
     if (d.messages.length) chatLast = d.messages[d.messages.length - 1].id;
@@ -583,8 +641,17 @@ async function renderSettings() {
     <h3>Shipping (QAR)</h3>
     <div class="set-grid">
       <label>Delivery fee<input type="number" min="0" name="shipping.fee" value="${sh.fee}"></label>
-      <label>Free delivery from (order subtotal)<input type="number" min="0" name="shipping.freeFrom" value="${sh.freeFrom}"></label>
+      <label>Free delivery from (order total of items)<input type="number" min="0" name="shipping.freeFrom" value="${sh.freeFrom}"><small class="hint muted">Orders of this amount or more ship free; below it the delivery fee is added. Changes apply to the shop, cart and top bar at once. (0 = always free)</small></label>
     </div>
+
+    <h3>Automatic chat reply</h3>
+    ${(() => {
+      const c = s.chat || {};
+      return `<p class="muted small">When a signed-in customer writes in the website chat, Lofan answers at once with the welcome message below (on their first message, or when they come back after a day). If they send an order number (LF-…), they are told that order's status.</p>
+      <label class="chk"><input type="checkbox" name="chat.autoReply" ${c.autoReply !== false ? 'checked' : ''}> Reply automatically</label>
+      <label>Welcome message<textarea name="chat.welcome" rows="4" maxlength="700">${v(c.welcome)}</textarea></label>
+      <label>Reply when a customer asks about an order but gives no order number<textarea name="chat.orderHelp" rows="2" maxlength="400">${v(c.orderHelp)}</textarea></label>`;
+    })()}
 
     <h3>Order rules – confirming payments</h3>
     ${(() => {
@@ -676,7 +743,7 @@ const deviceName = ua => {
 const ACTION_LABEL = {
   login: 'Signed in', login_failed: 'Failed sign-in', login_blocked: 'Blocked sign-in', logout: 'Signed out', 'admin.setup': 'First admin created',
   'admin.create': 'Admin created', 'admin.update': 'Admin changed', 'admin.delete': 'Admin deleted', 'password.change': 'Password changed',
-  'order.status': 'Order status', 'product.add': 'Product added', 'product.edit': 'Product edited', 'product.delete': 'Product deleted', 'product.deleteSoldOut': 'Sold-out items deleted',
+  'order.status': 'Order status', 'order.delete': 'Order DELETED', 'order.delete_request': 'Deletion requested', 'order.delete_approve': 'Deletion approved', 'order.delete_reject': 'Deletion rejected', 'product.add': 'Product added', 'product.edit': 'Product edited', 'product.delete': 'Product deleted', 'product.deleteSoldOut': 'Sold-out items deleted',
   'settings.update': 'Settings changed', 'customer.delete': 'Customer erased', 'enquiry.delete': 'Enquiry deleted', 'notifications.delete': 'Notifications deleted',
   'chat.delete': 'Chat message deleted', 'chat.clear': 'Chat cleared', reset: 'DATA RESET', 'session.revoke': 'Session signed out', 'session.revokeAll': 'Sessions signed out',
   'alert.whatsapp': 'WhatsApp alert', 'alert.sms': 'SMS alert (old)', 'alert.telegram': 'Telegram alert', 'alert.test': 'Alert test'

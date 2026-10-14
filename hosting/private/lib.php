@@ -104,17 +104,19 @@ function schema_statements($driver)
         "CREATE TABLE IF NOT EXISTS products(id $pk, name VARCHAR(200), cat VARCHAR(100), price INT, stock INT, img VARCHAR(300),
             `desc` VARCHAR(600) DEFAULT '', active INT DEFAULT 1)$tail",
         "CREATE TABLE IF NOT EXISTS orders(id VARCHAR(20) PRIMARY KEY, user_id INT, created BIGINT, items TEXT, subtotal INT, shipping INT, total INT,
-            delivery TEXT, method VARCHAR(100), txn VARCHAR(100), receipt VARCHAR(200), status VARCHAR(40)" . $k('o_user (user_id)') . $k('o_status (status)') . ")$tail",
+            delivery TEXT, method VARCHAR(100), txn VARCHAR(100), receipt VARCHAR(200), status VARCHAR(40),
+            del_state VARCHAR(12), del_by VARCHAR(120), del_reason VARCHAR(300), del_at BIGINT, del_decided_by VARCHAR(120), del_decided_at BIGINT"
+            . $k('o_user (user_id)') . $k('o_status (status)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS order_events(id $pk, order_id VARCHAR(20), status VARCHAR(40), note VARCHAR(400), created BIGINT" . $k('e_order (order_id)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS notifications(id $pk, kind VARCHAR(20), title VARCHAR(300), body TEXT, ref VARCHAR(100), created BIGINT, `read` INT DEFAULT 0)$tail",
         "CREATE TABLE IF NOT EXISTS enquiries(id $pk, name VARCHAR(120), company VARCHAR(160), email VARCHAR(190), phone VARCHAR(50), type VARCHAR(100),
             qty VARCHAR(100), message TEXT, created BIGINT, status VARCHAR(20) DEFAULT 'New')$tail",
-        "CREATE TABLE IF NOT EXISTS messages(id $pk, user_id INT, sender VARCHAR(20), body TEXT, created BIGINT, seen INT DEFAULT 0" . $k('m_user (user_id)') . ")$tail",
+        "CREATE TABLE IF NOT EXISTS messages(id $pk, user_id INT, sender VARCHAR(20), body TEXT, created BIGINT, seen INT DEFAULT 0, auto INT DEFAULT 0" . $k('m_user (user_id)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS settings(`key` VARCHAR(100) PRIMARY KEY, value MEDIUMTEXT)$tail",
     ];
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 function exec_schema()
 {
@@ -146,7 +148,9 @@ function migrate()
     if ($row && (int)$row['value'] >= SCHEMA_VERSION) return;
     exec_schema();                                                     // creates any new tables
     $add = [['users', 'admin_level', 'VARCHAR(10)'], ['users', 'disabled', 'INT DEFAULT 0'], ['users', 'last_login', 'BIGINT'],
-        ['sessions', 'ip', 'VARCHAR(64)'], ['sessions', 'ua', 'VARCHAR(255)'], ['sessions', 'created', 'BIGINT'], ['sessions', 'last_seen', 'BIGINT']];
+        ['sessions', 'ip', 'VARCHAR(64)'], ['sessions', 'ua', 'VARCHAR(255)'], ['sessions', 'created', 'BIGINT'], ['sessions', 'last_seen', 'BIGINT'],
+        ['orders', 'del_state', 'VARCHAR(12)'], ['orders', 'del_by', 'VARCHAR(120)'], ['orders', 'del_reason', 'VARCHAR(300)'], ['orders', 'del_at', 'BIGINT'],
+        ['orders', 'del_decided_by', 'VARCHAR(120)'], ['orders', 'del_decided_at', 'BIGINT'], ['messages', 'auto', 'INT DEFAULT 0']];
     foreach ($add as $a) {
         if (!column_exists($a[0], $a[1])) {
             try { db()->exec("ALTER TABLE {$a[0]} ADD COLUMN {$a[1]} {$a[2]}"); } catch (Throwable $e) { /* another request did it first */ }
@@ -175,6 +179,12 @@ function default_settings()
         'shop' => ['autoDeleteSoldOut' => false],
         // an order is only CONFIRMED after the payment is verified; unpaid orders are released after unpaidHours (0 = never)
         'orders' => ['requireReceipt' => true, 'unpaidHours' => 24],
+        // Automatic replies in the website chat. EDIT THE DEFAULT TEXTS HERE (they can also be changed in Admin > Company & Payments).
+        'chat' => [
+            'autoReply' => true,
+            'welcome' => "Hi, Welcome to Lofan! For your Home Accessories we will make it best for you. 🏡✨\nOur team will reply shortly. For any order query, please send your order number (it starts with LF-).",
+            'orderHelp' => 'To check an order, send your order number (it starts with LF-, for example LF-AB12CD) or open My Account > My Orders to see every step.',
+        ],
         'alerts' => [
             'events' => ['placed' => true, 'submitted' => true, 'confirmed' => true],
             // number '' = use the company WhatsApp number (Company details). provider: callmebot (free, personal WhatsApp) or webhook
@@ -364,12 +374,14 @@ function set_session_cookie($value, $expires)
 function start_session($userId, $admin = false)
 {
     $tok = random_token();
-    $ttl = $admin ? 7 * 86400 : 30 * 86400;                           // staff sign-ins expire sooner than customers'
+    // Admin / staff sign-ins are short: the browser forgets them when it is closed, and the server ends them after 12 hours.
+    // Customers stay signed in for 30 days (they can always press "Log out").
+    $ttl = $admin ? 12 * 3600 : 30 * 86400;
     q_exec('DELETE FROM sessions WHERE expires<?', [now()]);
     q_exec('INSERT INTO sessions(token,user_id,expires,ip,ua,created,last_seen) VALUES(?,?,?,?,?,?,?)',
         [$tok, (int)$userId, now() + $ttl, client_ip(), slice(str_val($_SERVER['HTTP_USER_AGENT'] ?? ''), 250), now(), now()]);
     q_exec('UPDATE users SET last_login=? WHERE id=?', [now(), (int)$userId]);
-    set_session_cookie($tok, now() + $ttl);
+    set_session_cookie($tok, $admin ? 0 : now() + $ttl);              // expires = 0 -> a "session cookie" for admins
 }
 
 /* ------------------------------------------------------------------ output shaping */
@@ -390,6 +402,13 @@ function order_out($row, $admin = false)
     $o['delivery'] = json_decode($o['delivery'], true) ?: [];
     $o['hasReceipt'] = !empty($o['receipt']);
     unset($o['receipt']);
+    $dr = null;                                                       // "delete this order" request (staff -> owner approval); admins only
+    if ($admin && !empty($o['del_state'])) {
+        $dr = ['state' => $o['del_state'], 'by' => (string)$o['del_by'], 'reason' => (string)$o['del_reason'], 'at' => (int)$o['del_at'],
+            'decidedBy' => (string)$o['del_decided_by'], 'decidedAt' => (int)$o['del_decided_at']];
+    }
+    foreach (['del_state', 'del_by', 'del_reason', 'del_at', 'del_decided_by', 'del_decided_at'] as $k) unset($o[$k]);
+    if ($admin) $o['deleteRequest'] = $dr;
     foreach (['created', 'subtotal', 'shipping', 'total'] as $k) $o[$k] = (int)$o[$k];
     $o['events'] = array_map(function ($e) { $e['created'] = (int)$e['created']; return $e; },
         q_all('SELECT status,note,created FROM order_events WHERE order_id=? ORDER BY id', [$o['id']]));
