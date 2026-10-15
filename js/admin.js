@@ -86,9 +86,10 @@ function popup(n) {
   const el = document.createElement('div');
   el.className = 'pop ' + n.kind;
   el.innerHTML = `<button class="pop-x" aria-label="Dismiss">&times;</button><strong>${esc(n.title)}</strong><p>${esc(n.body)}</p>
-    ${n.kind === 'enquiry' ? '<button class="btn" data-enq>View enquiries</button>' : n.kind === 'chat' ? `<button class="btn" data-chatpop="${esc(n.ref)}">Open chat</button>` : `<button class="btn" data-view="${esc(n.ref)}">View order</button>`}`;
+    ${n.kind === 'enquiry' ? '<button class="btn" data-enq>View enquiries</button>' : n.kind === 'chat' ? `<button class="btn" data-chatpop="${esc(n.ref)}">Open chat</button>` : n.kind === 'product' ? '<button class="btn" data-prod>View items</button>' : `<button class="btn" data-view="${esc(n.ref)}">View order</button>`}`;
   el.addEventListener('click', e => {
     if (e.target.closest('.pop-x')) return el.remove();
+    if (e.target.closest('[data-prod]')) { showTab('products'); el.remove(); return; }
     if (e.target.closest('[data-chatpop]')) { showTab('chats'); openThread(+n.ref); el.remove(); return; }
     if (e.target.closest('[data-view]')) { orderFilter = ''; showTab('orders'); setTimeout(() => { const c = $(`[data-order="${n.ref}"]`); if (c) { c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c.classList.add('flash'); } }, 400); el.remove(); }
     if (e.target.closest('[data-enq]')) { showTab('enquiries'); el.remove(); }
@@ -321,7 +322,7 @@ async function printInvoice(o) {
 /* ---------- products & stock ---------- */
 async function renderProducts() {
   const [d, st] = await Promise.all([api('/admin/products'), api('/admin/settings')]);
-  const auto = !!(st.settings.shop || {}).autoDeleteSoldOut;
+  const auto = !!(st.settings.shop || {}).autoDeleteSoldOut, owner = isOwner();
   let products = d.products; const f = { q: '', mode: '' };
   const sold = () => products.filter(p => p.stock <= 0).length, low = () => products.filter(p => p.stock > 0 && p.stock <= 5).length;
   panel(`
@@ -330,14 +331,18 @@ async function renderProducts() {
     <label class="chk auto-del"><input type="checkbox" id="autoDel" ${auto ? 'checked' : ''}>
       <span><strong>Delete sold-out items automatically.</strong> As soon as an item's stock reaches 0 it is removed from the shop and from this list for good.
       (An item with stock reserved by an unpaid order is kept until that order is paid or cancelled.)</span></label>
+    <div id="chgList"></div>
     <h3>Add a new item</h3>
+    ${owner ? '' : '<p class="set-warn">You are signed in as <strong>Staff</strong>: a new item stays hidden until the owner approves it, and price / description / photo changes are sent to the owner for approval.</p>'}
     <form id="addForm" class="adm-add" novalidate>
       <label>Item name<input name="name" required></label>
       <label>Category<select name="cat">${Object.entries(d.categories).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('')}</select></label>
       <label>Price (QAR)<input name="price" type="number" min="0" required></label>
       <label>Stock quantity<input name="stock" type="number" min="0" required></label>
-      <label class="wide">Short description (optional)<input name="desc"></label>
-      <label class="wide">Photo<input name="photo" type="file" accept="image/*" required></label>
+      <label class="wide">Description<input name="desc" maxlength="600" placeholder="What makes this item special"></label>
+      <label>Size<input name="size" maxlength="80" placeholder="e.g. 30 x 30 cm (approx.)"></label>
+      <label>Set includes<input name="includes" maxlength="200" placeholder="e.g. 1 Placemat, 1 Napkin, 1 Coaster"></label>
+      <label class="wide">Photos – you can choose several (the first one is the main photo; they slide every 3 seconds in the shop)<input name="photos" type="file" accept="image/*" multiple required></label>
       <button class="btn" type="submit">Add item</button>
     </form>
     <form id="catForm" class="adm-cat"><label>New category<input id="newCat" placeholder="e.g. Table Runners"></label><button class="btn ghost" type="submit">Add category</button></form>
@@ -356,12 +361,33 @@ async function renderProducts() {
     const q = f.q.toLowerCase();
     const list = products.filter(p => (!q || (p.name + ' ' + (d.categories[p.cat] || '')).toLowerCase().includes(q)) && (!f.mode || (f.mode === 'out' ? p.stock <= 0 : p.stock > 0 && p.stock <= 5)));
     $('#prodRows').innerHTML = list.length ? list.map(p => `<div class="adm-row prod ${p.stock <= 0 ? 'soldrow' : ''}" data-id="${p.id}">
-        <img src="${esc(p.img)}" alt=""><span><strong>${esc(p.name)}</strong><small>${esc(p.desc || '')}</small>${p.stock <= 0 ? '<em class="sold-tag">Sold out</em>' : p.stock <= 5 ? '<em class="low-tag">Low stock</em>' : ''}</span><span class="pcat">${esc(d.categories[p.cat] || p.cat)}</span>
-        <label class="pf"><em>Price (QAR)</em><input type="number" min="0" data-f="price" value="${p.price}"></label>
+        <img src="${esc(p.img)}" alt=""><span><strong>${esc(p.name)}</strong><small>${esc(p.desc || '')}</small>${p.stock <= 0 ? '<em class="sold-tag">Sold out</em>' : p.stock <= 5 ? '<em class="low-tag">Low stock</em>' : ''}${p.images.length > 1 ? `<em class="low-tag" style="background:#e3ecd4;color:#3d5028">${p.images.length} photos</em>` : ''}${!p.active ? '<em class="sold-tag">Hidden</em>' : ''}${p.request ? '<em class="low-tag">Change waiting for owner</em>' : ''}</span><span class="pcat">${esc(d.categories[p.cat] || p.cat)}</span>
+        ${owner
+          ? `<label class="pf"><em>Price (QAR)</em><input type="number" min="0" data-f="price" value="${p.price}"></label>`
+          : `<span class="pf"><em>Price (QAR)</em><b class="pricetxt" title="Only the owner can change the price - use Edit to send a request">${p.price} 🔒</b></span>`}
         <label class="pf"><em>Stock</em><input type="number" min="0" data-f="stock" value="${p.stock}" class="${p.stock === 0 ? 'zero' : ''}"></label>
-        <span class="vis"><input type="checkbox" data-f="active" ${p.active ? 'checked' : ''} title="Show in the shop"><em class="vtxt">Show in shop</em><button class="rm danger-text" data-del="${p.id}">Delete forever</button></span></div>`).join('')
+        <span class="vis"><input type="checkbox" data-f="active" ${p.active ? 'checked' : ''} title="Show in the shop"><em class="vtxt">Show in shop</em><button class="rm" data-edit="${p.id}">Edit</button><button class="rm danger-text" data-del="${p.id}">Delete forever</button></span></div>`).join('')
       : '<p class="muted" style="padding:16px 0">No items match.</p>';
-    drawHead();
+    drawHead(); drawChanges();
+  };
+  /* changes that staff asked for: the owner approves or rejects them here */
+  const REQ_LABEL = { name: 'Name', cat: 'Category', price: 'Price', desc: 'Description', size: 'Size', includes: 'Set includes', images: 'Photos', active: 'Show in shop' };
+  const drawChanges = () => {
+    const box = $('#chgList'); if (!box) return;
+    const reqs = products.filter(p => p.request);
+    if (!reqs.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<h3>${owner ? 'Item changes waiting for your approval' : 'Your changes waiting for the owner'} (${reqs.length})</h3>` + reqs.map(p => {
+      const c = p.request.changes, line = k => {
+        if (k === 'images') return `<li>Photos: ${p.images.length} → ${c.images.length}</li>`;
+        if (k === 'desc') return `<li>Description: <em>${esc(String(c.desc).slice(0, 140))}</em></li>`;
+        if (k === 'active') return `<li>${c.active ? 'Show this item in the shop' : 'Hide this item'}</li>`;
+        if (k === 'cat') return `<li>Category: ${esc(d.categories[p.cat] || p.cat)} → ${esc(d.categories[c.cat] || c.cat)}</li>`;
+        return `<li>${REQ_LABEL[k] || k}: ${esc(String(p[k] ?? ''))} → <strong>${esc(String(c[k]))}</strong></li>`;
+      };
+      return `<div class="chg" data-id="${p.id}"><img src="${esc(p.img)}" alt="">
+        <div><strong>${esc(p.name)}</strong> <span class="muted small">asked by ${esc(p.request.by)} · ${fmtDate(p.request.at)}</span><ul>${Object.keys(c).map(line).join('')}</ul></div>
+        ${owner ? `<div class="chg-btns"><button class="btn danger" data-chgyes="${p.id}">Approve</button><button class="btn ghost" data-chgno="${p.id}">Reject</button></div>` : ''}</div>`;
+    }).join('');
   };
   drawRows();
   $('#prodSearch').addEventListener('input', e => { f.q = e.target.value; drawRows(); });
@@ -380,6 +406,7 @@ async function renderProducts() {
     const val = fld === 'active' ? e.target.checked : Math.max(0, Math.round(+e.target.value || 0));
     try {
       const r = await api('/admin/products/' + p.id, { method: 'PUT', body: { [fld]: val } });
+      if (r.pending) { toast('Sent to the owner for approval'); renderProducts(); return; }   // staff: needs the owner's OK
       p[fld] = fld === 'active' ? (val ? 1 : 0) : val;
       if (r.autoDeleted) { toast('Sold out – item deleted automatically'); renderProducts(); return; }
       toast('Saved');
@@ -387,6 +414,16 @@ async function renderProducts() {
     } catch (err) { toast(err.message); }
   };
   $('#panel').onclick = async e => {
+    const t = e.target;
+    if (t.dataset.edit) { editItem(products.find(x => x.id === +t.dataset.edit), d.categories, owner, renderProducts); return; }
+    if (t.dataset.chgyes || t.dataset.chgno) {
+      const pid = t.dataset.chgyes || t.dataset.chgno;
+      try {
+        await api(`/admin/products/${pid}/change-decision`, { method: 'POST', body: { approve: !!t.dataset.chgyes } });
+        toast(t.dataset.chgyes ? 'Change approved and applied' : 'Change rejected'); renderProducts();
+      } catch (err) { toast(err.message); }
+      return;
+    }
     const id = e.target.dataset.del;
     if (id) {
       const p = products.find(x => x.id === +id);
@@ -405,13 +442,70 @@ async function renderProducts() {
   });
   $('#addForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const fm = e.target, v = Object.fromEntries(new FormData(fm)), file = fm.elements.photo.files[0], btn = $('button[type=submit]', fm);
+    const fm = e.target, v = Object.fromEntries(new FormData(fm)), files = [...fm.elements.photos.files], btn = $('button[type=submit]', fm);
+    if (!files.length) return toast('Choose at least one photo.');
+    if (files.length > 8) return toast('You can add up to 8 photos.');
     btn.disabled = true;
     try {
-      const data = await resizeImage(file);
-      await api('/admin/products', { method: 'POST', body: { name: v.name, cat: v.cat, price: v.price, stock: v.stock, desc: v.desc, image: { data } } });
-      toast('Item added to the shop'); renderProducts();
+      const images = [];
+      for (const file of files) images.push({ data: await resizeImage(file) });
+      const r = await api('/admin/products', { method: 'POST', body: { name: v.name, cat: v.cat, price: v.price, stock: v.stock, desc: v.desc, size: v.size, includes: v.includes, images } });
+      toast(r.pending ? 'Item saved (hidden) – waiting for the owner to approve it' : 'Item added to the shop'); renderProducts();
     } catch (err) { toast(err.message || 'Could not add item'); btn.disabled = false; }
+  });
+}
+/* Edit one item: details + photo manager. The owner saves directly; staff send it to the owner for approval. */
+function editItem(p, categories, owner, done) {
+  let photos = p.images.map(src => ({ src, url: src }));          // {src: existing path} or {data: new upload, url: preview}
+  Modal.open(`<h2>Edit <em>item</em></h2>
+    ${owner ? '' : '<p class="gate-note">Price, description, size and photos are changed only after the <strong>owner approves</strong>. Your request is sent when you press the button.</p>'}
+    <form id="editForm" novalidate>
+      <label>Item name<input name="name" value="${esc(p.name)}" maxlength="100"></label>
+      <label>Category<select name="cat">${Object.entries(categories).map(([k, v]) => `<option value="${esc(k)}" ${k === p.cat ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+      <div class="row"><label>Price (QAR)<input name="price" type="number" min="0" value="${p.price}"></label>
+        <label>Stock<input name="stock" type="number" min="0" value="${p.stock}"></label></div>
+      <label>Description<textarea name="desc" rows="4" maxlength="600">${esc(p.desc || '')}</textarea></label>
+      <label>Size<input name="size" value="${esc(p.size || '')}" maxlength="80" placeholder="e.g. 30 x 30 cm (approx.)"></label>
+      <label>Set includes<input name="includes" value="${esc(p.includes || '')}" maxlength="200" placeholder="e.g. 1 Placemat, 1 Napkin, 1 Coaster"></label>
+      <p class="small"><strong>Photos</strong> <span class="muted">– the first photo is the main one. In the shop all photos slide every 3 seconds.</span></p>
+      <div class="ph-list" id="phList"></div>
+      <label>Add more photos<input type="file" id="phAdd" accept="image/*" multiple></label>
+      <button class="btn full" type="submit">${owner ? 'Save changes' : 'Send for owner approval'}</button><p class="note" id="editNote"></p>
+    </form>`);
+  const draw = () => {
+    $('#phList').innerHTML = photos.map((ph, i) => `<div class="ph">${i === 0 ? '<span class="main">Main</span>' : ''}<img src="${esc(ph.url)}" alt="">
+      <div class="ph-btns"><button type="button" data-mv="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} title="Move earlier">&larr;</button>
+        <button type="button" class="x" data-rm="${i}" title="Remove this photo">&times;</button>
+        <button type="button" data-mv="${i}" data-d="1" ${i === photos.length - 1 ? 'disabled' : ''} title="Move later">&rarr;</button></div></div>`).join('');
+  };
+  draw();
+  $('#phList').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.rm !== undefined) photos.splice(+b.dataset.rm, 1);
+    if (b.dataset.mv !== undefined) { const i = +b.dataset.mv, j = i + +b.dataset.d; [photos[i], photos[j]] = [photos[j], photos[i]]; }
+    draw();
+  });
+  $('#phAdd').addEventListener('change', async e => {
+    const files = [...e.target.files];
+    if (photos.length + files.length > 8) { toast('An item can have up to 8 photos.'); e.target.value = ''; return; }
+    for (const f of files) { const data = await resizeImage(f); photos.push({ data, url: data }); }
+    e.target.value = ''; draw();
+  });
+  $('#editForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const note = $('#editNote'); note.className = 'note';
+    if (!photos.length) { note.textContent = 'An item needs at least one photo.'; note.classList.add('err'); return; }
+    const v = Object.fromEntries(new FormData(e.target)), body = {};
+    for (const k of ['name', 'cat', 'desc', 'size', 'includes']) if (v[k] !== String(p[k] ?? '')) body[k] = v[k];
+    for (const k of ['price', 'stock']) if (+v[k] !== p[k]) body[k] = v[k];
+    const sameImgs = photos.length === p.images.length && photos.every((ph, i) => ph.src === p.images[i]);
+    if (!sameImgs) body.images = photos.map(ph => ph.src ? ph.src : { data: ph.data });
+    if (!Object.keys(body).length) { Modal.close(); return; }
+    const btn = $('button[type=submit]', e.target); btn.disabled = true;
+    try {
+      const r = await api('/admin/products/' + p.id, { method: 'PUT', body });
+      Modal.close(); toast(r.pending ? 'Sent to the owner for approval' : 'Item saved'); done();
+    } catch (err) { note.textContent = err.message; note.classList.add('err'); btn.disabled = false; }
   });
 }
 async function resizeImage(file, max = 1200) {
@@ -743,6 +837,7 @@ const deviceName = ua => {
 const ACTION_LABEL = {
   login: 'Signed in', login_failed: 'Failed sign-in', login_blocked: 'Blocked sign-in', logout: 'Signed out', 'admin.setup': 'First admin created',
   'admin.create': 'Admin created', 'admin.update': 'Admin changed', 'admin.delete': 'Admin deleted', 'password.change': 'Password changed',
+  'product.change_request': 'Item change requested', 'product.change_approve': 'Item change approved', 'product.change_reject': 'Item change rejected',
   'order.status': 'Order status', 'order.delete': 'Order DELETED', 'order.delete_request': 'Deletion requested', 'order.delete_approve': 'Deletion approved', 'order.delete_reject': 'Deletion rejected', 'product.add': 'Product added', 'product.edit': 'Product edited', 'product.delete': 'Product deleted', 'product.deleteSoldOut': 'Sold-out items deleted',
   'settings.update': 'Settings changed', 'customer.delete': 'Customer erased', 'enquiry.delete': 'Enquiry deleted', 'notifications.delete': 'Notifications deleted',
   'chat.delete': 'Chat message deleted', 'chat.clear': 'Chat cleared', reset: 'DATA RESET', 'session.revoke': 'Session signed out', 'session.revokeAll': 'Sessions signed out',

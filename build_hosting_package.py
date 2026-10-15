@@ -43,7 +43,7 @@ def export_seed():
     c.row_factory = sqlite3.Row
     rows = lambda sql: [dict(r) for r in c.execute(sql)]
     seed = {'categories': rows('SELECT key,label,sort FROM categories ORDER BY sort'),
-            'products': rows('SELECT id,name,cat,price,stock,img,desc,active FROM products ORDER BY id')}
+            'products': rows('SELECT id,name,cat,price,stock,img,desc,active,images,size,includes FROM products ORDER BY id')}
     s = c.execute("SELECT value FROM settings WHERE key='settings'").fetchone()
     if s:
         st = json.loads(s[0])

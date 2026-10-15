@@ -516,7 +516,7 @@ h4{font-family:var(--serif);font-weight:400;font-size:24px;margin:22px 0 8px}
 .adm-row select{margin:0;padding:8px 6px;border:1px solid #b9b49c;background:#fff;font:inherit;font-size:14px;width:100%}
 .adm-row .sold-tag,.adm-row .low-tag{white-space:nowrap}
 .adm-tabs{gap:10px 20px}.adm-tabs button{letter-spacing:.14em}
-.adm-row.prod{grid-template-columns:64px 2fr 1fr 110px 90px 160px}
+.adm-row.prod{grid-template-columns:64px 2fr 1fr 110px 90px 230px}
 .adm-row.prod .vis{white-space:nowrap;justify-content:space-between}
 .adm-row input{font:inherit;font-size:14px}
 .pf{display:block;margin:0}.pf em{display:none}.pf input{display:block;width:100%}
@@ -703,3 +703,44 @@ form input[type=file]{padding:12px 0;font-size:14px;border-bottom-style:dashed}
   .topbar nav button,.topbar nav a{letter-spacing:.1em;padding:0 5px}
   .chat-panel.guest{height:auto;max-height:80dvh;top:auto}
 }
+/* ===== v11: product photo slider (auto every 3 s), square 30 x 30 boxes, item editor ===== */
+.card .pic{aspect-ratio:1/1}   /* the products are 30 x 30 cm: square photo box */
+.slider{position:relative;width:100%;height:100%;overflow:hidden}
+.slides{position:absolute;inset:0}
+.slides img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .7s ease,transform .8s}
+.slides img.on{opacity:1}
+.slider.single .slides{position:relative;height:100%}
+.card .pic.sold img{opacity:0;filter:grayscale(.6)}
+.card .pic.sold img.on{opacity:.45}
+.s-btn{position:absolute;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:50%;background:rgba(244,239,231,.9);color:var(--ink);font-size:24px;line-height:31px;text-align:center;opacity:0;transition:opacity .2s;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.s-btn.prev{left:8px}.s-btn.next{right:8px}
+.slider:hover .s-btn,.slider:focus-within .s-btn{opacity:1}
+@media(hover:none){.s-btn{opacity:.9;width:30px;height:30px;font-size:22px;line-height:27px}}
+.dots{position:absolute;left:0;right:0;bottom:9px;display:flex;justify-content:center;gap:4px;z-index:3}
+.dots i{display:block;width:8px;height:8px;margin:5px 3px;border-radius:50%;background:rgba(255,255,255,.7);box-shadow:0 0 0 1px rgba(0,0,0,.2);cursor:pointer;transition:.25s;box-sizing:content-box}
+.dots i.on{background:#fff;transform:scale(1.3)}
+.pic-view{z-index:4}
+.size-line{font-size:12px;letter-spacing:.06em;color:var(--muted);margin-top:2px}
+.card .desc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.pd-img{background:none;align-self:start}
+.pd-img .slider{aspect-ratio:1/1;height:auto}
+.pd-img .slides img{max-height:none}
+.pd-meta{font-size:14px;color:#5b5742;margin:0}
+.price small.muted{font-size:13px;letter-spacing:0}
+@media(max-width:700px){.pd-img .slider{aspect-ratio:auto;height:min(78vw,340px)}.card .desc{display:none}.size-line{font-size:11px;line-height:1.4}}
+/* admin: photo manager + item changes waiting for the owner */
+.ph-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;margin:8px 0 14px}
+.ph{position:relative;border:1px solid #d6d0bd;background:#fff;padding:4px;font-size:11px;text-align:center}
+.ph img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block}
+.ph .main{position:absolute;left:6px;top:6px;background:var(--sage);color:#fff;padding:1px 6px;font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.ph-btns{display:flex;justify-content:space-between;margin-top:3px}
+.ph-btns button{min-width:28px;height:28px;font-size:15px;line-height:1;color:var(--sage-dark)}
+.ph-btns button:hover{background:var(--cream-2)}
+.ph-btns .x{color:#b04a3a}
+.chg{display:grid;grid-template-columns:64px 1fr auto;gap:14px;align-items:center;padding:12px 14px;border-left:3px solid #c07a1d;background:#f6e4cf;margin-bottom:10px;font-size:14px}
+.chg img{width:64px;height:64px;object-fit:cover}
+.chg ul{margin:4px 0 0 18px}
+.chg-btns{display:flex;flex-direction:column;gap:8px}
+.pricetxt{font-weight:500}
+.edit-modal{max-width:640px}
+@media(max-width:800px){.chg{grid-template-columns:48px 1fr}.chg img{width:48px;height:48px}.chg-btns{grid-column:1/-1;flex-direction:row}}

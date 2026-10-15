@@ -1,0 +1,86 @@
+{
+ "category": {
+  "key": "collections",
+  "label": "Collections"
+ },
+ "products": [
+  {
+   "name": "Blue Blossom Collection",
+   "cat": "collections",
+   "price": 110,
+   "stock": 10,
+   "size": "30 x 30 cm (approx.)",
+   "includes": "1 Placemat, 1 Napkin, 1 Coaster",
+   "desc": "Inspired by the beauty of blooming flowers, this elegant collection combines soft cotton with exquisite blue embroidery and beautifully scalloped edges. Designed to bring a fresh, graceful touch to every dining occasion.",
+   "images": [
+    "images/products/blue-blossom-1.jpg",
+    "images/products/blue-blossom-2.jpg"
+   ]
+  },
+  {
+   "name": "Butterfly Bliss Collection",
+   "cat": "collections",
+   "price": 110,
+   "stock": 10,
+   "size": "30 x 30 cm (approx.)",
+   "includes": "1 Placemat, 1 Napkin, 1 Coaster",
+   "desc": "Made from premium cotton, featuring delicate lace butterflies, soft pastel colors, and beautiful pink embroidery. A sweet and elegant design that adds a gentle touch of charm to your dining table.",
+   "images": [
+    "images/products/butterfly-bliss-1.jpg",
+    "images/products/butterfly-bliss-2.jpg"
+   ]
+  },
+  {
+   "name": "Grape Collection",
+   "cat": "collections",
+   "price": 110,
+   "stock": 10,
+   "size": "30 x 30 cm (approx.)",
+   "includes": "1 Placemat, 1 Napkin, 1 Coaster",
+   "desc": "Crafted from premium cotton, featuring delicate grape embroidery and elegant green borders. A timeless design that brings a touch of nature, charm, and style to your dining table.",
+   "images": [
+    "images/products/grape-1.jpg",
+    "images/products/grape-2.jpg"
+   ]
+  },
+  {
+   "name": "Spring Garden Collection",
+   "cat": "collections",
+   "price": 110,
+   "stock": 10,
+   "size": "30 x 30 cm (approx.)",
+   "includes": "1 Placemat, 1 Napkin, 1 Coaster",
+   "desc": "A delicate blend of soft colors and nature-inspired embroidery. Made from premium cotton, this collection features beautifully detailed floral motifs and refined finishing, bringing a sense of freshness and understated luxury to your table setting.",
+   "images": [
+    "images/products/spring-garden-1.jpg"
+   ]
+  },
+  {
+   "name": "Blue Crane Collection",
+   "cat": "collections",
+   "price": 110,
+   "stock": 10,
+   "size": "30 x 30 cm (approx.)",
+   "includes": "1 Placemat, 1 Napkin, 1 Coaster",
+   "desc": "Inspired by the graceful beauty of birds in flight, this collection features exquisite crane embroidery in soft blue and white tones. Crafted from premium cotton with delicate stitched details and elegant blue borders, adding a fresh and timeless charm to your dining table.",
+   "images": [
+    "images/products/blue-crane-1.jpg",
+    "images/products/blue-crane-2.jpg"
+   ]
+  },
+  {
+   "name": "Silver Grace Collection",
+   "cat": "collections",
+   "price": 110,
+   "stock": 10,
+   "size": "30 x 30 cm (approx.)",
+   "includes": "1 Placemat, 1 Napkin, 1 Coaster",
+   "desc": "A beautiful expression of elegance and craftsmanship. Featuring premium cotton, intricate grey embroidery, and distinctive geometric edges. This unique collection brings a touch of modern sophistication and timeless beauty to your dining table.",
+   "images": [
+    "images/products/silver-grace-1.jpg",
+    "images/products/silver-grace-2.jpg",
+    "images/products/silver-grace-3.jpg"
+   ]
+  }
+ ]
+}

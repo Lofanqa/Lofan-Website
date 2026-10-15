@@ -134,8 +134,12 @@ function handle_api($method, $route, $body)
 
     if ($R('GET', 'products')) {
         $s = get_settings();
-        $prods = array_map(function ($p) { foreach (['id', 'price', 'stock'] as $k) $p[$k] = (int)$p[$k]; return $p; },
-            q_all('SELECT id,name,cat,price,stock,img,`desc` FROM products WHERE active=1 ORDER BY id'));
+        $prods = array_map(function ($p) {
+            foreach (['id', 'price', 'stock'] as $k) $p[$k] = (int)$p[$k];
+            $p['images'] = product_images($p);                      // photos shown as a slider (first = main photo)
+            $p['size'] = (string)($p['size'] ?? ''); $p['includes'] = (string)($p['includes'] ?? '');
+            return $p;
+        }, q_all('SELECT id,name,cat,price,stock,img,images,size,includes,`desc` FROM products WHERE active=1 ORDER BY id DESC'));   // newest first
         return [200, ['categories' => $cats(), 'products' => $prods, 'shipping' => $s['shipping'], 'currency' => CURRENCY, 'company' => $s['company']]];
     }
 
@@ -497,59 +501,81 @@ function handle_api($method, $route, $body)
         return [200, ['ok' => true, 'deleted' => $n]];
     }
 
-    if ($R('GET', 'admin/products')) {
-        $prods = array_map(function ($p) { foreach (['id', 'price', 'stock', 'active'] as $k) $p[$k] = (int)$p[$k]; return $p; }, q_all('SELECT * FROM products ORDER BY id'));
-        return [200, ['categories' => $cats(), 'products' => $prods]];
-    }
-
-    $product_fields = function ($d, $base = null) {
-        $b = $base ?: [];
-        if (array_key_exists('name', $d)) $b['name'] = clean($d['name'], 100);
-        if (array_key_exists('cat', $d)) {
-            if (!q_val('SELECT 1 FROM categories WHERE `key`=?', [str_val($d['cat'])])) throw new ApiError(400, 'Unknown category');
-            $b['cat'] = str_val($d['cat']);
-        }
-        foreach (['price', 'stock'] as $f) {
-            if (array_key_exists($f, $d)) {
-                if (!is_numeric($d[$f])) throw new ApiError(400, "Invalid $f");
-                $b[$f] = max(0, (int)$d[$f]);
-            }
-        }
-        if (array_key_exists('desc', $d)) $b['desc'] = clean($d['desc'], 300);
-        if (array_key_exists('active', $d)) $b['active'] = $d['active'] ? 1 : 0;
-        if (!empty($d['image']['data'])) {
-            $slug = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower(str_val($b['name'] ?? 'item'))), '-') ?: 'item';
-            $fn = save_data_url($d['image']['data'], product_img_dir(), $slug . '-' . bin2hex(random_bytes(3)), ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'], 4000000);
-            $b['img'] = 'images/products/' . $fn;
-        }
-        return $b;
+    $prod_out = function ($p) {   // one product as the admin sees it (photos, size, and a change waiting for the owner)
+        foreach (['id', 'price', 'stock', 'active'] as $k) $p[$k] = (int)$p[$k];
+        $p['images'] = product_images($p);
+        $p['size'] = (string)($p['size'] ?? ''); $p['includes'] = (string)($p['includes'] ?? '');
+        $req = json_decode((string)($p['req_json'] ?? ''), true);
+        $p['request'] = (is_array($req) && $req) ? ['by' => (string)$p['req_by'], 'at' => (int)$p['req_at'], 'changes' => $req] : null;
+        unset($p['req_json'], $p['req_by'], $p['req_at']);
+        return $p;
     };
+    if ($R('GET', 'admin/products')) {
+        return [200, ['categories' => $cats(), 'products' => array_map($prod_out, q_all('SELECT * FROM products ORDER BY id DESC'))]];
+    }
 
     if ($R('POST', 'admin/products/delete-soldout')) {   // one click: permanently remove every item that has no stock
         $n = q_exec('DELETE FROM products WHERE stock<=0');
         log_admin('product.deleteSoldOut', "$n sold-out item(s) deleted");
         return [200, ['ok' => true, 'deleted' => $n]];
     }
+    /* Prices, descriptions, photos and other item details are changed directly only by an OWNER.
+       Staff send the change to the owner (a "request"); it is applied when the owner approves. Stock and hiding an item stay direct. */
     if ($R('POST', 'admin/products')) {
-        $p = $product_fields($json());
-        if (empty($p['name']) || !isset($p['cat']) || !isset($p['price']) || !isset($p['img'])) throw new ApiError(400, 'Name, category, price and photo are required.');
-        q_exec('INSERT INTO products(name,cat,price,stock,img,`desc`,active) VALUES(?,?,?,?,?,?,?)',
-            [$p['name'], $p['cat'], $p['price'], $p['stock'] ?? 0, $p['img'], $p['desc'] ?? '', $p['active'] ?? 1]);
-        log_admin('product.add', $p['name'] . ' (' . $p['price'] . ' QAR, stock ' . ($p['stock'] ?? 0) . ')');
-        return [200, ['ok' => true]];
+        $me = current_user(); $c = product_changes($json(), []);
+        if (empty($c['name']) || !isset($c['cat']) || !isset($c['price']) || empty($c['images'])) throw new ApiError(400, 'Name, category, price and at least one photo are required.');
+        $owner = is_owner($me);
+        $id = q_insert('INSERT INTO products(name,cat,price,stock,img,`desc`,active,images,size,includes) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            [$c['name'], $c['cat'], $c['price'], $c['stock'] ?? 0, $c['images'][0], $c['desc'] ?? '', $owner ? ($c['active'] ?? 1) : 0,
+                json_encode($c['images'], JSON_UNESCAPED_SLASHES), $c['size'] ?? '', $c['includes'] ?? '']);
+        if (!$owner) {                                     // staff: the item stays hidden until the owner approves it
+            q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode(['active' => 1]), $me['name'], now(), $id]);
+            notify('product', 'New item waiting for approval', $me['name'] . ' added "' . $c['name'] . '" (' . $c['price'] . ' ' . CURRENCY . '). It is hidden until you approve it.', (string)$id);
+        }
+        log_admin('product.add', $c['name'] . ' (' . $c['price'] . ' QAR, stock ' . ($c['stock'] ?? 0) . ')' . ($owner ? '' : ' - waiting for owner approval'));
+        return [200, ['ok' => true, 'pending' => !$owner]];
     }
     if ($R('PUT', 'admin/products/(\d+)')) {
         $row = q_one('SELECT * FROM products WHERE id=?', [(int)$m[1]]);
         if (!$row) throw new ApiError(404, 'Not found');
-        $in = $json();
-        $p = $product_fields($in, $row);
-        $chg = [];
-        foreach (['name', 'cat', 'price', 'stock', 'desc', 'active'] as $f) if (array_key_exists($f, $in) && (string)$row[$f] !== (string)$p[$f]) $chg[] = $f . ': ' . $row[$f] . ' -> ' . $p[$f];
-        if ($chg) log_admin('product.edit', $row['name'] . ' - ' . implode('; ', $chg));
-        q_exec('UPDATE products SET name=?,cat=?,price=?,stock=?,img=?,`desc`=?,active=? WHERE id=?',
-            [$p['name'], $p['cat'], (int)$p['price'], (int)$p['stock'], $p['img'], $p['desc'], (int)$p['active'], (int)$row['id']]);
-        $gone = ((int)$p['stock'] <= 0) ? sweep_soldout() : 0;
-        return [200, ['ok' => true, 'autoDeleted' => $gone]];
+        $me = current_user(); $c = product_changes($json(), $row);
+        $direct = $c; $ask = [];
+        if (!is_owner($me)) {                              // staff: only stock and "hide" are theirs; everything else needs the owner
+            $direct = [];
+            foreach ($c as $k => $v) {
+                if ($k === 'stock' || ($k === 'active' && !$v)) $direct[$k] = $v; else $ask[$k] = $v;
+            }
+        }
+        if ($direct) {
+            apply_product_changes($row['id'], $direct);
+            log_admin('product.edit', $row['name'] . ' - ' . implode('; ', describe_product_changes($row, $direct)));
+        }
+        if ($ask) {
+            $old = json_decode((string)($row['req_json'] ?? ''), true);
+            $merged = array_merge(is_array($old) ? $old : [], $ask);
+            q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $me['name'], now(), (int)$row['id']]);
+            $what = implode('; ', describe_product_changes($row, $ask));
+            notify('product', 'Item change waiting for approval - ' . $row['name'], $me['name'] . ' asks to change: ' . $what, (string)$row['id']);
+            log_admin('product.change_request', $row['name'] . ' - ' . $what);
+        }
+        $gone = (array_key_exists('stock', $direct) && (int)$direct['stock'] <= 0) ? sweep_soldout() : 0;
+        return [200, ['ok' => true, 'pending' => (bool)$ask, 'autoDeleted' => $gone]];
+    }
+    if ($R('POST', 'admin/products/(\d+)/change-decision')) {   // the owner approves or rejects what staff asked for
+        need_owner(); $d = $json();
+        $row = q_one('SELECT * FROM products WHERE id=?', [(int)$m[1]]);
+        if (!$row) throw new ApiError(404, 'Not found');
+        $req = json_decode((string)($row['req_json'] ?? ''), true);
+        if (!is_array($req) || !$req) throw new ApiError(409, 'There is no change waiting for this item.');
+        $yes = !empty($d['approve']);
+        $what = implode('; ', describe_product_changes($row, $req));
+        if ($yes) apply_product_changes($row['id'], $req);
+        q_exec('UPDATE products SET req_json=NULL,req_by=NULL,req_at=NULL WHERE id=?', [(int)$row['id']]);
+        $owner = current_user();
+        notify('product', ($yes ? 'Item change approved' : 'Item change rejected') . ' - ' . $row['name'], $owner['name'] . ($yes ? ' approved' : ' rejected') . ' the change requested by ' . $row['req_by'] . '.', (string)$row['id']);
+        log_admin($yes ? 'product.change_approve' : 'product.change_reject', $row['name'] . ' - ' . $what . ' (requested by ' . $row['req_by'] . ')');
+        if ($yes) sweep_soldout();
+        return [200, ['product' => $prod_out(q_one('SELECT * FROM products WHERE id=?', [(int)$row['id']]))]];
     }
     if ($R('DELETE', 'admin/products/(\d+)')) {   // permanent: gone from the shop and the admin list (past orders keep their own copy)
         $pn = q_val('SELECT name FROM products WHERE id=?', [(int)$m[1]]);

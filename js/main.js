@@ -19,6 +19,7 @@ const FALLBACK = {
   ].map(([name, cat, price, img], i) => ({ id: 9000 + i, name, cat, price, stock: 10, img, desc: '' }))
 };
 const product = id => PRODUCTS.find(p => p.id === id);
+const photosOf = p => (p.images && p.images.length ? p.images : [p.img]);
 const stockOf = p => (p ? p.stock : 0);
 
 /* ---------- Smooth navigation ---------- */
@@ -65,9 +66,10 @@ function renderProducts() {
   const list = PRODUCTS.filter(p => words.length ? productMatches(p, words) : (filter === 'all' || p.cat === filter));
   $('#productGrid').innerHTML = list.map(p => `
     <article class="card" data-id="${p.id}">
-      <div class="pic ${p.stock > 0 ? '' : 'sold'}" title="View details"><img src="${esc(p.img)}" alt="${esc(p.name)}" loading="lazy"><span class="pic-view">View details</span></div>
+      <div class="pic ${p.stock > 0 ? '' : 'sold'}" title="View details">${sliderHTML(photosOf(p), p.name)}<span class="pic-view">View details</span></div>
       <p class="cat-name">${esc(CATS[p.cat] || '')}</p>
       <h3>${esc(p.name)}</h3>
+      ${p.size ? `<p class="size-line">${esc(p.size)}${p.includes ? ' · set of ' + (p.includes.split(',').length) : ''}</p>` : ''}
       ${p.desc ? `<p class="desc">${esc(p.desc)}</p>` : ''}
       <p class="price">${money(p.price)}${p.stock > 0 && p.stock <= 5 ? `<small class="low"> · only ${p.stock} left</small>` : ''}</p>
       ${p.stock > 0 ? `<button class="add" data-id="${p.id}">Add to Cart</button>` : '<button class="add" disabled>Sold out</button>'}
@@ -82,7 +84,9 @@ function renderProducts() {
 function setFilter(f) { filter = f; if (query) clearSearch(false); else { renderFilters(); renderProducts(); } }
 $('#filters').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setFilter(b.dataset.filter); });
 $$('.cat[data-filter]').forEach(a => a.addEventListener('click', () => setFilter(a.dataset.filter)));
+document.addEventListener('click', e => { if (e.target.closest('#modal')) sliderClick(e); });   // arrows inside the product pop-up
 $('#productGrid').addEventListener('click', e => {
+  if (sliderClick(e)) return;                                          // photo arrows / dots must not open the product
   const b = e.target.closest('.add');
   if (b) { if (!b.disabled) addToCart(+b.dataset.id); return; }
   const card = e.target.closest('.card'); if (card) showProduct(+card.dataset.id);   // click an item = see its details & availability
@@ -105,11 +109,13 @@ function showProduct(id) {
   const avail = p.stock <= 0 ? ['out', 'Sold out'] : p.stock <= 5 ? ['low', `Only ${p.stock} left – order soon`] : ['in', `In stock – ${p.stock} available`];
   Modal.open(`
     <div class="pd">
-      <div class="pd-img"><img src="${esc(p.img)}" alt="${esc(p.name)}"></div>
+      <div class="pd-img">${sliderHTML(photosOf(p), p.name, 'big')}</div>
       <div class="pd-info">
         <p class="cat-name">${esc(CATS[p.cat] || '')}</p>
         <h2>${esc(p.name)}</h2>
-        <p class="price big">${money(p.price)}</p>
+        <p class="price big">${money(p.price)}${p.includes ? ' <small class="muted">per set</small>' : ''}</p>
+        ${p.size ? `<p class="pd-meta"><strong>Size:</strong> ${esc(p.size)}</p>` : ''}
+        ${p.includes ? `<p class="pd-meta"><strong>Set includes:</strong> ${esc(p.includes)}</p>` : ''}
         <p class="avail ${avail[0]}"><i></i>${avail[1]}</p>
         ${p.desc ? `<p class="pd-desc">${esc(p.desc)}</p>` : ''}
         ${inCart ? `<p class="muted small">You already have ${inCart} in your cart.</p>` : ''}

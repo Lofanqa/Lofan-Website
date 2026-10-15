@@ -14,5 +14,5 @@ deployment:
     - /bin/cp -f hosting/.htaccess hosting/.user.ini hosting/robots.txt /home/lofanqa/public_html/
     - /bin/cp -f hosting/api/index.php /home/lofanqa/public_html/api/
     - /bin/mkdir -p /home/lofanqa/public_html/private/receipts /home/lofanqa/public_html/private/applepay /home/lofanqa/public_html/private/throttle
-    - /bin/cp -f hosting/private/lib.php hosting/private/extras.php hosting/private/routes.php hosting/private/.htaccess /home/lofanqa/public_html/private/
+    - /bin/cp -f hosting/private/lib.php hosting/private/extras.php hosting/private/routes.php hosting/private/catalog.json hosting/private/.htaccess /home/lofanqa/public_html/private/
     - if [ ! -f /home/lofanqa/public_html/private/installed.lock ]; then /bin/cp -f hosting/install.php /home/lofanqa/public_html/ && /bin/cp -f hosting/private/seed.json /home/lofanqa/public_html/private/; fi

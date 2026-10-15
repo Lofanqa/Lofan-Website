@@ -73,9 +73,23 @@ AFTER A PAYMENT IS SUBMITTED
   Cancelling an order puts the stock back automatically.
 
 ADD / UPDATE STOCK  (Admin > Products & Stock)
-  - "Add a new item": name, category, price, stock, photo -> Add item (live immediately).
-  - Change price / stock directly in the table; stock 0 shows "Sold out".
-  - Untick "Visible" to hide an item. Stock drops automatically when orders are placed.
+  - "Add a new item": name, category, price, stock, description, size, set contents and ONE OR MORE photos
+    (choose several files at once, up to 8) -> Add item. In the shop the photos slide automatically every 3 seconds,
+    with arrows, dots and swipe on phones. The first photo is the main one (cart, orders).
+  - "Edit" on an item: change name, price, description, size, set contents; add / remove / re-order photos
+    (the first photo is the main one).
+  - Stock can be changed directly in the table; stock 0 shows "Sold out".
+  - Untick "Show in shop" to hide an item. Stock drops automatically when orders are placed.
+  - WHO MAY CHANGE WHAT: the OWNER changes price, description, photos and other details directly. STAFF can change
+    stock and hide an item; for price / description / size / photos they press Edit > "Send for owner approval".
+    The owner sees "Item changes waiting for your approval" at the top of Products & Stock with Approve / Reject
+    (a notification pops up too). A new item added by staff stays hidden until the owner approves it.
+  - Product boxes in the shop are square (the products are 30 x 30 cm). Each collection also shows its size and what
+    the set includes.
+  - The six collections from "Lofan 1.pdf" (Blue Blossom, Butterfly Bliss, Grape, Spring Garden, Blue Crane,
+    Silver Grace - 110 QAR per set) are in hosting/private/catalog.json with their photos in images/products/.
+    They are added to the shop automatically (once) when the website is updated; their stock starts at 10 - set the
+    real stock in Admin. To add more products the same way, add entries to catalog.json (same layout) - or just use Admin.
 
 CHATTING WITH CUSTOMERS (website chat + WhatsApp)
   Customers: a "Chat with us" button sits bottom-right on every page (they must be signed in).

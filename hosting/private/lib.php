@@ -102,7 +102,8 @@ function schema_statements($driver)
             ua VARCHAR(255), created BIGINT" . $k('l_created (created)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS categories(`key` VARCHAR(100) PRIMARY KEY, label VARCHAR(200), sort INT DEFAULT 0)$tail",
         "CREATE TABLE IF NOT EXISTS products(id $pk, name VARCHAR(200), cat VARCHAR(100), price INT, stock INT, img VARCHAR(300),
-            `desc` VARCHAR(600) DEFAULT '', active INT DEFAULT 1)$tail",
+            `desc` VARCHAR(600) DEFAULT '', active INT DEFAULT 1, images TEXT, size VARCHAR(80) DEFAULT '', includes VARCHAR(200) DEFAULT '',
+            req_json TEXT, req_by VARCHAR(120), req_at BIGINT)$tail",
         "CREATE TABLE IF NOT EXISTS orders(id VARCHAR(20) PRIMARY KEY, user_id INT, created BIGINT, items TEXT, subtotal INT, shipping INT, total INT,
             delivery TEXT, method VARCHAR(100), txn VARCHAR(100), receipt VARCHAR(200), status VARCHAR(40),
             del_state VARCHAR(12), del_by VARCHAR(120), del_reason VARCHAR(300), del_at BIGINT, del_decided_by VARCHAR(120), del_decided_at BIGINT"
@@ -116,7 +117,7 @@ function schema_statements($driver)
     ];
 }
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 function exec_schema()
 {
@@ -150,7 +151,9 @@ function migrate()
     $add = [['users', 'admin_level', 'VARCHAR(10)'], ['users', 'disabled', 'INT DEFAULT 0'], ['users', 'last_login', 'BIGINT'],
         ['sessions', 'ip', 'VARCHAR(64)'], ['sessions', 'ua', 'VARCHAR(255)'], ['sessions', 'created', 'BIGINT'], ['sessions', 'last_seen', 'BIGINT'],
         ['orders', 'del_state', 'VARCHAR(12)'], ['orders', 'del_by', 'VARCHAR(120)'], ['orders', 'del_reason', 'VARCHAR(300)'], ['orders', 'del_at', 'BIGINT'],
-        ['orders', 'del_decided_by', 'VARCHAR(120)'], ['orders', 'del_decided_at', 'BIGINT'], ['messages', 'auto', 'INT DEFAULT 0']];
+        ['orders', 'del_decided_by', 'VARCHAR(120)'], ['orders', 'del_decided_at', 'BIGINT'], ['messages', 'auto', 'INT DEFAULT 0'],
+        ['products', 'images', 'TEXT'], ['products', 'size', "VARCHAR(80) DEFAULT ''"], ['products', 'includes', "VARCHAR(200) DEFAULT ''"],
+        ['products', 'req_json', 'TEXT'], ['products', 'req_by', 'VARCHAR(120)'], ['products', 'req_at', 'BIGINT']];
     foreach ($add as $a) {
         if (!column_exists($a[0], $a[1])) {
             try { db()->exec("ALTER TABLE {$a[0]} ADD COLUMN {$a[1]} {$a[2]}"); } catch (Throwable $e) { /* another request did it first */ }
@@ -165,7 +168,42 @@ function migrate()
             q_exec("UPDATE settings SET value=? WHERE `key`='settings'", [json_encode($j, JSON_UNESCAPED_UNICODE)]);
         }
     }
+    import_catalog();                                                  // new collections from private/catalog.json (added once, by name)
     set_schema_version(SCHEMA_VERSION);
+}
+
+/* ------------------------------------------------------------------ product photos + catalog */
+/* A product keeps its photos as a JSON list in `images`; `img` is always the first one (shop cards, cart, orders). */
+function product_images($row)
+{
+    $j = json_decode((string)($row['images'] ?? ''), true);
+    $l = is_array($j) ? array_values(array_filter($j, function ($x) { return is_string($x) && $x !== ''; })) : [];
+    if (!$l && !empty($row['img'])) $l = [(string)$row['img']];
+    return $l;
+}
+/* Adds the products listed in private/catalog.json that the shop does not have yet (matched by name). Safe to run again. */
+function import_catalog()
+{
+    $file = __DIR__ . '/catalog.json';
+    if (!is_file($file)) return 0;
+    $cat = json_decode((string)file_get_contents($file), true);
+    if (!is_array($cat) || empty($cat['products'])) return 0;
+    $c = $cat['category'] ?? null;
+    if (is_array($c) && !empty($c['key']) && !q_val('SELECT 1 FROM categories WHERE `key`=?', [$c['key']])) {
+        $first = (int)q_val('SELECT COALESCE(MIN(sort),1) FROM categories');
+        q_exec('INSERT INTO categories(`key`,label,sort) VALUES(?,?,?)', [$c['key'], $c['label'] ?? $c['key'], $first - 1]);   // shown first
+    }
+    $n = 0;
+    foreach (array_reverse($cat['products']) as $p) {                   // newest id first in the shop: the list reads 1, 2, 3 ...
+        if (empty($p['name']) || q_val('SELECT 1 FROM products WHERE name=?', [$p['name']])) continue;
+        $imgs = array_values(array_filter($p['images'] ?? [], 'is_string'));
+        if (!$imgs) continue;
+        q_exec('INSERT INTO products(name,cat,price,stock,img,`desc`,active,images,size,includes) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            [$p['name'], $p['cat'] ?? ($c['key'] ?? 'custom'), (int)($p['price'] ?? 0), (int)($p['stock'] ?? 0), $imgs[0], (string)($p['desc'] ?? ''), 1,
+                json_encode($imgs, JSON_UNESCAPED_SLASHES), (string)($p['size'] ?? ''), (string)($p['includes'] ?? '')]);
+        $n++;
+    }
+    return $n;
 }
 
 /* ------------------------------------------------------------------ default settings & seed data */
@@ -230,7 +268,7 @@ function seed_db($seed)
 {
     $cols = [
         'categories' => ['key', 'label', 'sort'],
-        'products' => ['id', 'name', 'cat', 'price', 'stock', 'img', 'desc', 'active'],
+        'products' => ['id', 'name', 'cat', 'price', 'stock', 'img', 'desc', 'active', 'images', 'size', 'includes'],
         'users' => ['id', 'name', 'email', 'phone', 'address', 'salt', 'hash', 'role', 'created', 'google_sub', 'lat', 'lng', 'loc_at'],
         'orders' => ['id', 'user_id', 'created', 'items', 'subtotal', 'shipping', 'total', 'delivery', 'method', 'txn', 'receipt', 'status'],
         'order_events' => ['id', 'order_id', 'status', 'note', 'created'],
@@ -253,6 +291,7 @@ function seed_db($seed)
         save_settings($seed['settings']);
     }
     if (!q_val("SELECT 1 FROM settings WHERE `key`='settings'")) save_settings(default_settings());
+    import_catalog();                                                   // the collections from the catalog file, if the shop does not have them
 }
 
 /* ------------------------------------------------------------------ helpers */

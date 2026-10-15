@@ -280,6 +280,46 @@ function renderChrome() {
   </header>`;
   $('#burger').addEventListener('click', () => $('.header').classList.toggle('menu'));
 }
+/* ---------- Photo slider: product cards and the product pop-up. Arrows, dots, swipe, and automatic every 3 seconds ---------- */
+const SLIDE_MS = 3000;
+function sliderHTML(images, alt, cls = '') {
+  const list = (images || []).filter(Boolean);
+  if (list.length <= 1) return `<div class="slider single ${cls}"><div class="slides"><img class="on" src="${esc(list[0] || '')}" alt="${esc(alt)}" loading="lazy"></div></div>`;
+  return `<div class="slider ${cls}" data-slider data-i="0" data-n="${list.length}">
+    <div class="slides">${list.map((src, i) => `<img class="${i ? '' : 'on'}" src="${esc(src)}" alt="${esc(alt)} – photo ${i + 1}" loading="${i ? 'lazy' : 'eager'}">`).join('')}</div>
+    <button type="button" class="s-btn prev" data-slide="-1" aria-label="Previous photo">&#8249;</button>
+    <button type="button" class="s-btn next" data-slide="1" aria-label="Next photo">&#8250;</button>
+    <span class="dots">${list.map((_, i) => `<i class="${i ? '' : 'on'}" data-dot="${i}" aria-label="Photo ${i + 1}"></i>`).join('')}</span></div>`;
+}
+function slideTo(s, i) {
+  const n = +s.dataset.n; i = ((i % n) + n) % n; s.dataset.i = i;
+  $$('.slides img', s).forEach((im, k) => im.classList.toggle('on', k === i));
+  $$('.dots i', s).forEach((d, k) => d.classList.toggle('on', k === i));
+}
+function sliderClick(e) {   // true when the click was an arrow / dot (so the product card must not open)
+  const b = e.target.closest('[data-slide]'), dot = e.target.closest('[data-dot]'), ctl = b || dot;
+  if (!ctl) return false;
+  const s = ctl.closest('[data-slider]'); if (!s) return false;
+  e.preventDefault(); e.stopPropagation();
+  slideTo(s, b ? +s.dataset.i + (+b.dataset.slide) : +dot.dataset.dot);
+  s.dataset.hold = Date.now();                       // after a manual click wait a full 3 seconds before sliding again
+  return true;
+}
+setInterval(() => {
+  const canHover = window.matchMedia && matchMedia('(hover:hover)').matches;
+  $$('[data-slider]').forEach(s => {
+    if ((canHover && s.matches(':hover')) || Date.now() - (+s.dataset.hold || 0) < SLIDE_MS - 200) return;   // paused while the mouse is on it
+    slideTo(s, +s.dataset.i + 1);
+  });
+}, SLIDE_MS);
+let swipeX = null;                                    // swipe left / right on phones
+document.addEventListener('touchstart', e => { swipeX = e.target.closest('[data-slider]') ? e.touches[0].clientX : null; }, { passive: true });
+document.addEventListener('touchend', e => {
+  if (swipeX === null) return;
+  const s = e.target.closest('[data-slider]'), dx = e.changedTouches[0].clientX - swipeX; swipeX = null;
+  if (s && Math.abs(dx) > 40) { slideTo(s, +s.dataset.i + (dx < 0 ? 1 : -1)); s.dataset.hold = Date.now(); }
+}, { passive: true });
+
 /* ---------- Live chat with the Lofan team (customers) ---------- */
 const Chat = { last: 0, timer: null, shown: false };
 const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
