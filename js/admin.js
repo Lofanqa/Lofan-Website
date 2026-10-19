@@ -167,7 +167,7 @@ async function updateOrderBadge() {
 
 /* Approvals: what staff asked for and what the owner decided. Owners see every open request; staff see their own open
    requests; every admin sees the decided ones with the name of the person who asked. */
-const APPROVAL_KIND = { order_delete: 'Delete order', product_change: 'Item change', product_add: 'New item' };
+const APPROVAL_KIND = { order_delete: 'Delete order', product_delete: 'Delete item', product_change: 'Item change', product_add: 'New item' };
 function approvalsHTML(list) {
   if (!list.length) return '<p class="muted small">No approvals yet.</p>';
   return list.map(a => {
@@ -389,7 +389,7 @@ async function renderProducts() {
   const sold = () => products.filter(p => p.stock <= 0).length, low = () => products.filter(p => p.stock > 0 && p.stock <= 5).length;
   panel(`
     <div class="adm-save"><div><strong id="prodCount"></strong><p class="muted small" id="prodSub"></p></div>
-      <div class="adm-btns"><button class="btn danger" id="delSold">Delete all sold-out items</button></div></div>
+      <div class="adm-btns">${owner ? '<button class="btn danger" id="delSold">Delete all sold-out items</button>' : ''}</div></div>
     <label class="chk auto-del"><input type="checkbox" id="autoDel" ${auto ? 'checked' : ''}>
       <span><strong>Delete sold-out items automatically.</strong> As soon as an item's stock reaches 0 it is removed from the shop and from this list for good.
       (An item with stock reserved by an unpaid order is kept until that order is paid or cancelled.)</span></label>
@@ -417,7 +417,7 @@ async function renderProducts() {
   const drawHead = () => {
     $('#prodCount').textContent = `${products.length} item${products.length === 1 ? '' : 's'} in the shop`;
     $('#prodSub').innerHTML = `<span class="${sold() ? 'bad' : ''}">${sold()} sold out</span> · ${low()} running low – items with no stock can be deleted permanently.`;
-    $('#delSold').disabled = !sold(); $('#delSold').textContent = `Delete all sold-out items (${sold()})`;
+    const ds = $('#delSold'); if (ds) { ds.disabled = !sold(); ds.textContent = `Delete all sold-out items (${sold()})`; }
   };
   const drawRows = () => {
     const q = f.q.toLowerCase();
@@ -428,7 +428,7 @@ async function renderProducts() {
           ? `<label class="pf"><em>Price (QAR)</em><input type="number" min="0" data-f="price" value="${p.price}"></label>`
           : `<span class="pf"><em>Price (QAR)</em><b class="pricetxt" title="Only the owner can change the price - use Edit to send a request">${p.price} 🔒</b></span>`}
         <label class="pf"><em>Stock</em><input type="number" min="0" data-f="stock" value="${p.stock}" class="${p.stock === 0 ? 'zero' : ''}"></label>
-        <span class="vis"><input type="checkbox" data-f="active" ${p.active ? 'checked' : ''} title="Show in the shop"><em class="vtxt">Show in shop</em><button class="rm" data-edit="${p.id}">Edit</button><button class="rm danger-text" data-del="${p.id}">Delete forever</button></span></div>`).join('')
+        <span class="vis"><input type="checkbox" data-f="active" ${p.active ? 'checked' : ''} title="Show in the shop"><em class="vtxt">Show in shop</em><button class="rm" data-edit="${p.id}">Edit</button><button class="rm danger-text" data-del="${p.id}">${owner ? 'Delete forever' : 'Ask to delete'}</button></span></div>`).join('')
       : '<p class="muted" style="padding:16px 0">No items match.</p>';
     drawHead(); drawChanges();
   };
@@ -440,6 +440,7 @@ async function renderProducts() {
     if (!reqs.length) { box.innerHTML = ''; return; }
     box.innerHTML = `<h3>${owner ? 'Item changes waiting for your approval' : 'Your changes waiting for the owner'} (${reqs.length})</h3>` + reqs.map(p => {
       const c = p.request.changes, line = k => {
+        if (k === 'delete') return '<li><strong>Delete this item forever</strong></li>';
         if (k === 'images') return `<li>Photos: ${p.images.length} → ${c.images.length}</li>`;
         if (k === 'desc') return `<li>Description: <em>${esc(String(c.desc).slice(0, 140))}</em></li>`;
         if (k === 'active') return `<li>${c.active ? 'Show this item in the shop' : 'Hide this item'}</li>`;
@@ -489,8 +490,13 @@ async function renderProducts() {
     const id = e.target.dataset.del;
     if (id) {
       const p = products.find(x => x.id === +id);
-      if (!confirm(`Delete "${p.name}" FOREVER?\n\nIt disappears from the shop and from this list and cannot be brought back. Past orders keep their own record of it.`)) return;
-      await api('/admin/products/' + id, { method: 'DELETE' }); toast('Item deleted permanently'); renderProducts(); return;
+      const msg = owner
+        ? `Delete "${p.name}" FOREVER?\n\nIt disappears from the shop and from this list and cannot be brought back. Past orders keep their own record of it.`
+        : `Ask the owner to delete "${p.name}" forever?\n\nThe item stays in the shop until the owner approves the deletion.`;
+      if (!confirm(msg)) return;
+      try { const r = await api('/admin/products/' + id, { method: 'DELETE' }); toast(r.pending ? 'Sent to the owner for approval' : 'Item deleted permanently'); renderProducts(); }
+      catch (err) { toast(err.message); }
+      return;
     }
     if (e.target.id === 'delSold') {
       const n = sold();

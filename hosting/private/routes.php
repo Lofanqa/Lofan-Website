@@ -617,7 +617,8 @@ function handle_api($method, $route, $body)
         return [200, ['categories' => $cats(), 'products' => array_map($prod_out, q_all('SELECT * FROM products ORDER BY id DESC'))]];
     }
 
-    if ($R('POST', 'admin/products/delete-soldout')) {   // one click: permanently remove every item that has no stock
+    if ($R('POST', 'admin/products/delete-soldout')) {   // one click: permanently remove every item that has no stock (owner only; staff ask per item)
+        need_owner();
         $n = q_exec('DELETE FROM products WHERE stock<=0');
         log_admin('product.deleteSoldOut', "$n sold-out item(s) deleted");
         return [200, ['ok' => true, 'deleted' => $n]];
@@ -673,6 +674,17 @@ function handle_api($method, $route, $body)
         $req = json_decode((string)($row['req_json'] ?? ''), true);
         if (!is_array($req) || !$req) throw new ApiError(409, 'There is no change waiting for this item.');
         $yes = !empty($d['approve']);
+        if (!empty($req['delete'])) {                       // staff asked to delete this item forever
+            $owner = current_user();
+            $asked = q_one("SELECT req_user FROM approvals WHERE ref=? AND kind='product_delete' AND status='pending' ORDER BY id DESC LIMIT 1", [(string)$row['id']]);
+            approval_decide((string)$row['id'], ['product_delete', 'product_change', 'product_add'], $yes ? 'approved' : 'rejected', $owner['name']);
+            if ($yes) q_exec('DELETE FROM products WHERE id=?', [(int)$row['id']]);
+            else q_exec('UPDATE products SET req_json=NULL,req_by=NULL,req_at=NULL WHERE id=?', [(int)$row['id']]);
+            notify('product', ($yes ? 'Deletion approved' : 'Deletion rejected') . ' - ' . $row['name'], $owner['name'] . ($yes ? ' approved' : ' rejected') . ' your request to delete this item.', (string)$row['id'],
+                $asked ? (int)$asked['req_user'] : null, !$asked);
+            log_admin($yes ? 'product.delete_approve' : 'product.delete_reject', $row['name'] . ' (requested by ' . $row['req_by'] . ')');
+            return [200, ['product' => null, 'deleted' => $yes]];
+        }
         $what = implode('; ', describe_product_changes($row, $req));
         if ($yes) apply_product_changes($row['id'], $req);
         q_exec('UPDATE products SET req_json=NULL,req_by=NULL,req_at=NULL WHERE id=?', [(int)$row['id']]);
@@ -685,10 +697,19 @@ function handle_api($method, $route, $body)
         if ($yes) sweep_soldout();
         return [200, ['product' => $prod_out(q_one('SELECT * FROM products WHERE id=?', [(int)$row['id']]))]];
     }
-    if ($R('DELETE', 'admin/products/(\d+)')) {   // permanent: gone from the shop and the admin list (past orders keep their own copy)
-        $pn = q_val('SELECT name FROM products WHERE id=?', [(int)$m[1]]);
-        q_exec('DELETE FROM products WHERE id=?', [(int)$m[1]]);
-        log_admin('product.delete', 'Deleted forever: ' . $pn);
+    if ($R('DELETE', 'admin/products/(\d+)')) {   // permanent (past orders keep their own copy). Owner: at once. Staff: owner approval first.
+        $me = current_user(); $row = q_one('SELECT * FROM products WHERE id=?', [(int)$m[1]]);
+        if (!$row) throw new ApiError(404, 'Not found');
+        if (!is_owner($me)) {
+            $old = json_decode((string)($row['req_json'] ?? ''), true);
+            q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode(array_merge(is_array($old) ? $old : [], ['delete' => true])), $me['name'], now(), (int)$row['id']]);
+            approval_add('product_delete', $row['id'], 'Delete item forever: ' . $row['name'], (int)$row['price'] . ' ' . CURRENCY . ' · stock ' . (int)$row['stock'], $me);
+            notify('product', 'Deletion waiting for approval - ' . $row['name'], $me['name'] . ' asks to delete this item forever.', (string)$row['id'], null, true);
+            log_admin('product.delete_request', $row['name'] . ' - requested by ' . $me['name']);
+            return [200, ['ok' => true, 'pending' => true]];
+        }
+        q_exec('DELETE FROM products WHERE id=?', [(int)$row['id']]);
+        log_admin('product.delete', 'Deleted forever: ' . $row['name']);
         return [200, ['ok' => true]];
     }
 
