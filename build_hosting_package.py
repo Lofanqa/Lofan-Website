@@ -52,6 +52,8 @@ def export_seed():
         st['google'] = {'clientId': ''}
         al = st.get('alerts') or {}                                   # never export WhatsApp / Telegram secrets
         al.pop('sms', None)                                           # SMS / Twilio alerts were removed
+        pay = st.get('payments') or {}                                # card-payment token must never leave this PC in a package
+        if isinstance(pay.get('card'), dict): pay['card'].update({'apiToken': '', 'enabled': False})
         if isinstance(al.get('whatsapp'), dict): al['whatsapp'].update({'apiKey': '', 'enabled': False})
         if isinstance(al.get('telegram'), dict): al['telegram'].update({'botToken': '', 'enabled': False})
         seed['settings'] = st

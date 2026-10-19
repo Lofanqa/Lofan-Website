@@ -150,6 +150,20 @@ CUSTOMER LOCATION -> GOOGLE MAPS
     you are) and a small map. Uses normal Google Maps links, no API key needed.
   - Location sharing only works on https:// (or localhost), so your live site needs HTTPS.
 
+CUSTOM ORDERS AND ENQUIRIES
+  - The website form is "Custom Order" (name, email, mobile and message required; company optional; up to 5 photos).
+  - Admin > Enquiries is an inbox: each enquiry is a conversation. Reply with WhatsApp or SMS (the text is ready to send;
+    the owner can change it in Company & Payments). Notes stay internal.
+
+CARD PAYMENT AND PASSWORD CODES (details in hosting/README-HOSTING.txt)
+  - Card payment goes to the secure page of a payment provider (for example MyFatoorah); card details are never typed on
+    this website. Switch it on in Admin > Company & Payments once you have the provider's API token.
+  - "Forgot password?" on the admin sign-in page sends a 6-digit code to the admin's e-mail.
+
+SECURITY AND APPROVALS (owner / staff)
+  - Owner: all settings, security, activity log and approvals. Staff: their own security page only; their requests for
+    price / description / deletion changes are approved by the owner (see Notifications > Approvals).
+
 SIGNING IN AND OUT
   - While somebody is signed in, the top bar shows "Hi, <name>" and a "Log out" button on every page (admins see "Admin").
   - Customers stay signed in for 30 days unless they press Log out. Admin / staff sign-ins end when the browser is closed

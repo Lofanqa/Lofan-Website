@@ -184,6 +184,59 @@ STEP 7  Share it
   Every alert (sent or failed, with the reason) appears in the activity log.
 
 
+================= CUSTOM ORDER ENQUIRIES (INBOX) =================
+
+  The website form is called "Custom Order". Name, email, mobile number and message are required; company is optional.
+  The customer may attach up to 5 reference photos (for example a picture of an item they like).
+  Admin > Enquiries is an inbox: the left side lists every enquiry (new ones are marked New); the right side shows the
+  whole conversation: the customer's message, their photos (click to open) and every reply you sent.
+  To answer: the reply text is already written (Admin > Company & Payments > "Enquiry reply text" – the owner can change
+  it; {name} = the customer's first name, {topic} = what they asked about). Edit it if you like, then press:
+     - Send on WhatsApp  -> WhatsApp opens with the text filled in; press send in WhatsApp.
+     - Send by SMS       -> the phone's messages app opens with the text (works on a phone).
+     - Save as internal note -> a note only the team sees (not sent to the customer).
+  Each reply is saved in the conversation and the enquiry is marked "Replied". Delete an enquiry = its photos and
+  conversation are removed for good.
+
+================= CARD PAYMENTS (SECURE, ON THE PROVIDER'S PAGE) =================
+
+  Customers can pay by bank card. When they press "Pay securely by card" they are taken to the secure payment page of
+  your payment provider. They type their card number, expiry and security code THERE – never on lofan.qa – and the money
+  is paid into the bank account you link with that provider. When the provider reports the payment as approved, the
+  order becomes "Payment confirmed" automatically (the server checks the payment with the provider itself).
+  The option appears at checkout only after you switch it on (Admin > Company & Payments > Card payments).
+
+  Setup (you do this, it needs your own account):
+     1. Open a merchant account with a payment provider that works with Qatari banks. MyFatoorah is one option; your bank
+        may also recommend one. Make sure the account currency is QAR and the settlement bank account is your company account.
+     2. In the provider's dashboard create an API token and copy it.
+     3. Admin > Company & Payments > Card payments: paste the token, leave "Test mode" ticked for the first tests, tick
+        "Offer card payment at checkout" and press Save.
+     4. Test one order with the provider's test card numbers (listed in the provider's documentation), then untick
+        "Test mode" and save again to take real payments.
+  Notes: the provider's return addresses must be your https:// address (lofan.qa), so test on the live site, not on
+  localhost. Fees are charged by the provider; ask them for the price list before you switch it on.
+
+================= PASSWORD RESET BY E-MAIL CODE (ADMINS AND STAFF) =================
+
+  On the admin sign-in page press "Forgot password?", enter your login e-mail, and a 6-digit code is sent to it. Enter the
+  code and a new password (8+ characters, letters and numbers). The code is valid for 10 minutes and can be used once.
+  Signed-in staff can do the same from Admin > Security > "Forgot your password?".
+  The codes are sent with the e-mail service of your hosting (cPanel). Ask us to check the mail settings if they do not
+  arrive; they may land in the spam folder the first time. The admin's login e-mail must be a real mailbox you can read.
+
+================= WHO SEES WHAT (OWNER AND STAFF) =================
+
+  Owner: everything – Company & Payments (bank, card, reply text, alerts), Security (who is signed in, admin accounts,
+  activity log, reset of test data), approvals, and all orders, products, chat and enquiries.
+  Staff: Orders, Products & Stock (stock and "show in shop" directly; prices and details need the owner's approval),
+  Notifications, Chat, Enquiries and Customers. Security shows only THEIR OWN page: sign out of this device, sign out
+  other devices, change their password and reset it by e-mail code. Company & Payments is hidden.
+  Approvals: when staff ask for something (delete an order, change an item, add a new item), the owner sees it in
+  Notifications > Approvals with who asked. The owner's answer is sent only to the person who asked. Once decided,
+  every admin can see the approval in the list, with the name of who asked and who decided. An approved order deletion
+  can be carried out only by the staff member who asked, within 24 hours.
+
 ================= PHONE VIEW =================
 
   All pages (shop, cart, payment, My Account, admin) adapt automatically to phones and tablets: bigger touch buttons,
@@ -192,6 +245,24 @@ STEP 7  Share it
 
 
 ================= PART 3 – EASY EDITING: VS Code -> GitHub -> cPanel (recommended) =================
+
+  STEP BY STEP – what you do (about 20 minutes, once). Never send your passwords in chat or e-mail; type them only in the
+  sign-in windows that GitHub, Windows or cPanel open.
+   1. GitHub account: go to github.com and sign up (or sign in) with the e-mail you use for the business. Turn on 2-step
+      verification in Settings.
+   2. New empty repository: github.com > "+" > New repository > name  lofan  > Private (recommended) > do NOT tick
+      "Add a README" or ".gitignore" > Create repository. Copy its address, it looks like  https://github.com/YOUR-NAME/lofan.git
+   3. Connect your folder: in VS Code open the Terminal (Ctrl+`) and type these, one line at a time:
+          git remote add origin https://github.com/YOUR-NAME/lofan.git
+          git push -u origin main
+      A GitHub sign-in window opens: sign in and press "Authorize". Windows remembers it afterwards.
+   4. cPanel: Git Version Control > Create. Clone URL: the same https://github.com/YOUR-NAME/lofan.git ; repository path:
+      lofan > Create. (For a Private repository cPanel needs a deploy key – see "Private repository" below.)
+   5. In cPanel open the repository > Manage > "Update from Remote" > "Deploy HEAD Commit". The website files are copied
+      into public_html (the database and customer data are never touched). Then open https://lofan.qa and press Ctrl+F5.
+   6. From now on: edit files in VS Code > double-click Publish-To-GitHub.bat and type a short note > then in cPanel
+      press "Update from Remote" and "Deploy HEAD Commit" again. Your changes are live.
+   Tip: if the deploy shows an error, do not edit anything on the server – open the cPanel error text and send it to us.
 
   After the first publish (Part 1) you never need to make a zip again.
   Daily routine:

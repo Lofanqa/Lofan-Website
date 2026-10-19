@@ -49,6 +49,11 @@ try {
     if ($method !== 'GET') $pdo->beginTransaction();
     $res = handle_api($method, $route, $body);
     if ($pdo->inTransaction()) $pdo->commit();
+    if ($res[0] === 'redirect') {                       // e.g. back from the card payment page
+        header('Location: ' . $res[1], true, 302);
+        header('Cache-Control: no-store');
+        exit;
+    }
     if ($res[0] === 'raw') {
         header('Content-Type: ' . $res[2]);
         header('Content-Disposition: inline; filename="' . $res[3] . '"');

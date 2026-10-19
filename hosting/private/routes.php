@@ -123,6 +123,35 @@ function handle_api($method, $route, $body)
         return [200, ['user' => public_user(user_by_id($uid)), 'created' => $created]];
     }
 
+    /* password reset for admins and staff with a 6-digit code sent to their login e-mail */
+    if ($R('POST', 'auth/otp/request')) {   // "Forgot password?" on the admin sign-in page. Always the same answer, so it reveals nothing.
+        $d = $json(); $em = lower(clean($d['email'] ?? '', 120));
+        throttle('otpreq' . client_ip(), 6, 900);
+        $u = $em !== '' ? q_one("SELECT * FROM users WHERE email=? AND role='admin' AND (disabled IS NULL OR disabled=0)", [$em]) : null;
+        if ($u) otp_issue($u);
+        return [200, ['ok' => true, 'message' => 'If this e-mail belongs to an admin account, a 6-digit code has been sent to it. The code is valid for ' . OTP_MINUTES . ' minutes.']];
+    }
+    if ($R('POST', 'auth/otp/confirm')) {   // enter the code and the new password
+        $d = $json(); $em = lower(clean($d['email'] ?? '', 120)); $code = str_val($d['code'] ?? ''); $pw = str_val($d['password'] ?? '');
+        $u = $em !== '' ? q_one("SELECT * FROM users WHERE email=? AND role='admin'", [$em]) : null;
+        if (!$u) throw new ApiError(400, 'The code is not valid or has expired. Please request a new one.', 'code');
+        throttle('otp' . $u['id'], 8, 900);                         // wrong guesses are counted (this is kept even if the request fails)
+        if (!preg_match('/^\d{6}$/', $code) || !otp_accept($u, $code)) throw new ApiError(400, 'The code is not valid or has expired. Please request a new one.', 'code');
+        if (!password_ok($pw)) throw new ApiError(400, PASSWORD_RULE, 'password');
+        q_exec("UPDATE users SET salt='', `hash`=? WHERE id=?", [hash_new_pw($pw), (int)$u['id']]);
+        q_exec('DELETE FROM sessions WHERE user_id=?', [(int)$u['id']]);   // every device is signed out; sign in again with the new password
+        log_admin('password.reset_code', 'Password reset with an e-mail code', $u);
+        return [200, ['ok' => true]];
+    }
+    if ($R('POST', 'me/otp/request')) {     // logged-in admin / staff: send a code to their own login e-mail
+        $u = need_admin();
+        throttle('otpreq' . $u['id'], 6, 900);
+        $parts = explode('@', (string)$u['email']);
+        $masked = substr($parts[0], 0, 1) . '***@' . ($parts[1] ?? '');
+        if (!otp_issue($u)) throw new ApiError(502, 'The code could not be sent right now (or you asked for several codes in the last 15 minutes). Please wait a few minutes and try again.');
+        return [200, ['ok' => true, 'sentTo' => $masked]];
+    }
+
     if ($R('POST', 'logout')) {
         $cu = current_user();
         if ($cu && $cu['role'] === 'admin') log_admin('logout', 'Signed out', $cu);
@@ -146,10 +175,18 @@ function handle_api($method, $route, $body)
     if ($R('POST', 'enquiries')) {
         $d = $json();
         $name = clean($d['name'] ?? '', 80); $email = clean($d['email'] ?? '', 120); $phone = clean($d['phone'] ?? '', 30); $msg = clean($d['message'] ?? '', 2000);
-        if ($name === '' || $msg === '' || !valid_email($email) || $phone === '') throw new ApiError(400, 'Please complete the required fields.');
+        if (slen($name) < 2) throw new ApiError(400, 'Please enter your full name.', 'name');
+        if (!valid_email($email)) throw new ApiError(400, 'Please enter a valid email address.', 'email');
+        if (!valid_phone(norm_phone($phone))) throw new ApiError(400, 'Please enter your mobile number (we reply on WhatsApp or SMS).', 'phone');
+        if (slen($msg) < 5) throw new ApiError(400, 'Please describe what you need.', 'message');
+        if (is_array($d['images'] ?? null) && count($d['images']) > ENQ_MAX_IMAGES) throw new ApiError(400, 'You can attach up to ' . ENQ_MAX_IMAGES . ' reference photos.');
+        $type = clean($d['type'] ?? '', 60);
         $id = q_insert('INSERT INTO enquiries(name,company,email,phone,type,qty,message,created) VALUES(?,?,?,?,?,?,?,?)',
-            [$name, clean($d['company'] ?? '', 80), $email, $phone, clean($d['type'] ?? '', 60), clean($d['qty'] ?? '', 60), $msg, now()]);
-        notify('enquiry', "New enquiry from $name", clean($d['type'] ?? '', 60) . ' · ' . $phone, (string)$id);
+            [$name, clean($d['company'] ?? '', 80), $email, $phone, $type, clean($d['qty'] ?? '', 60), $msg, now()]);
+        $files = save_enquiry_images($d['images'] ?? [], $id);
+        if ($files) q_exec('UPDATE enquiries SET images=? WHERE id=?', [json_encode($files, JSON_UNESCAPED_SLASHES), $id]);
+        q_exec("INSERT INTO enquiry_msgs(enquiry_id,sender,channel,body,by_name,created) VALUES(?,?,?,?,?,?)", [$id, 'customer', 'web', $msg, $name, now()]);
+        notify('enquiry', "New enquiry from $name", ($type !== '' ? $type . ' · ' : '') . $phone . ($files ? ' · ' . count($files) . ' photo(s)' : ''), (string)$id);
         return [200, ['ok' => true]];
     }
 
@@ -291,6 +328,49 @@ function handle_api($method, $route, $body)
         return [200, ['order' => order_out(order_by_id($oid))]];
     }
 
+    /* card payment: the customer is sent to the payment provider's own page. Card details never reach this website. */
+    if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/card/start')) {
+        $u = need_user(); $oid = $m[1];
+        $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
+        if (!$r) throw new ApiError(404, 'Order not found');
+        if ($r['status'] !== 'Awaiting payment') throw new ApiError(409, 'This order is no longer awaiting payment.');
+        $cfg = get_settings()['payments']['card'];
+        if (empty($cfg['enabled']) || str_val($cfg['apiToken']) === '') throw new ApiError(400, 'Card payment is not available right now. Please choose another payment method.');
+        throttle('card' . $u['id'], 10, 600);
+        $dl = json_decode($r['delivery'], true) ?: [];
+        $back = site_base_url() . '/api/card/return/' . $oid;
+        $inv = mf_call('/v2/SendPayment', $cfg['apiToken'], [
+            'CustomerName' => slice(str_val($dl['name'] ?? 'Customer'), 60), 'InvoiceValue' => (int)$r['total'],
+            'CustomerEmail' => valid_email(str_val($dl['email'] ?? '')) ? str_val($dl['email']) : str_val($u['email']),
+            'NotificationOption' => 'LNK', 'CustomerReference' => $oid, 'Language' => 'EN',
+            'CallBackUrl' => $back, 'ErrorUrl' => $back . '?fail=1', 'UserDefinedField' => 'Lofan order ' . $oid]);
+        if (empty($inv['InvoiceURL']) || empty($inv['InvoiceId'])) throw new ApiError(502, 'The card payment page could not be opened. Please choose another payment method or try again.');
+        q_exec('UPDATE orders SET method=?,txn=? WHERE id=?', ['Bank card (secure online)', 'MF-' . (int)$inv['InvoiceId'], $oid]);
+        add_event($oid, 'Awaiting payment', 'Card payment page opened (ref MF-' . (int)$inv['InvoiceId'] . ')');
+        return [200, ['url' => (string)$inv['InvoiceURL']]];
+    }
+    if ($R('GET', 'card/return/(LF-[A-Z0-9]{6})')) {   // the provider sends the customer back here; the server checks the payment itself
+        $oid = $m[1]; $page = 'payment.html?order=' . $oid;
+        $r = order_by_id($oid);
+        if (!$r) return ['redirect', 'index.html'];
+        if ($r['status'] !== 'Awaiting payment') return ['redirect', $page . '&paid=1'];
+        $pid = qs('paymentId', '');
+        $cfg = get_settings()['payments']['card'];
+        if ($pid === '' || !ctype_digit($pid) || str_val($cfg['apiToken']) === '') return ['redirect', $page . '&failed=1'];
+        $st = mf_call('/v2/GetPaymentStatus', $cfg['apiToken'], ['Key' => $pid, 'KeyType' => 'PaymentId']);
+        $invId = (int)($st['InvoiceId'] ?? 0);
+        $paid = ($st['InvoiceStatus'] ?? '') === 'Paid' && $r['txn'] === 'MF-' . $invId && abs((float)($st['InvoiceValue'] ?? 0) - (int)$r['total']) < 0.5;
+        if (!$paid) return ['redirect', $page . '&failed=1'];
+        $n = q_exec("UPDATE orders SET status='Payment confirmed', method='Bank card (secure online)', txn=? WHERE id=? AND status='Awaiting payment'", ['MF-' . $invId . ' / ' . $pid, $oid]);
+        if ($n) {
+            add_event($oid, 'Payment confirmed', 'Card payment approved by the payment provider (ref ' . $pid . ')');
+            $dn = (json_decode($r['delivery'], true) ?: [])['name'] ?? '';
+            notify('payment', "Card payment received – $oid", "$dn paid " . (int)$r['total'] . ' ' . CURRENCY . ' by card. Already confirmed.', $oid);
+            queue_alert('confirmed', $oid);
+        }
+        return ['redirect', $page . '&paid=1'];
+    }
+
     if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/cancel')) {
         $u = need_user(); $oid = $m[1];
         $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
@@ -392,6 +472,8 @@ function handle_api($method, $route, $body)
         if (!is_owner($me)) {
             $ok = $r['del_state'] === 'approved' && now() - (int)$r['del_decided_at'] <= DELETE_APPROVAL_HOURS * 3600;
             if (!$ok) throw new ApiError(403, 'Only the owner can delete an order. Ask the owner for approval first (Request deletion).');
+            $by = q_one("SELECT req_user FROM approvals WHERE ref=? AND kind='order_delete' AND status='approved' ORDER BY id DESC LIMIT 1", [$oid]);
+            if (!$by || (int)$by['req_user'] !== (int)$me['id']) throw new ApiError(403, 'This deletion was approved for the staff member who asked for it.');
             $how = 'with approval of ' . $r['del_decided_by'];
         }
         $d = json_decode($r['delivery'], true) ?: [];
@@ -410,7 +492,8 @@ function handle_api($method, $route, $body)
         if (slen($reason) < 3) throw new ApiError(400, 'Please write why this order should be deleted.');
         q_exec("UPDATE orders SET del_state='pending',del_by=?,del_reason=?,del_at=?,del_decided_by=NULL,del_decided_at=NULL WHERE id=?", [$me['name'], $reason, now(), $oid]);
         $dd = json_decode($r['delivery'], true) ?: [];
-        notify('order', "Deletion request - $oid", $me['name'] . ' asks to delete this order (' . str_val($dd['name'] ?? '') . ', ' . (int)$r['total'] . ' ' . CURRENCY . '): ' . $reason, $oid);
+        approval_add('order_delete', $oid, "Delete order $oid", $reason . ' · ' . str_val($dd['name'] ?? '') . ' · ' . (int)$r['total'] . ' ' . CURRENCY, $me);
+        notify('order', "Deletion request - $oid", $me['name'] . ' asks to delete this order (' . str_val($dd['name'] ?? '') . ', ' . (int)$r['total'] . ' ' . CURRENCY . '): ' . $reason, $oid, null, true);
         log_admin('order.delete_request', "$oid: requested by " . $me['name'] . ' - ' . $reason);
         return [200, ['order' => order_out(order_by_id($oid), true)]];
     }
@@ -420,8 +503,12 @@ function handle_api($method, $route, $body)
         if (!$r) throw new ApiError(404, 'Order not found');
         if ($r['del_state'] !== 'pending') throw new ApiError(409, 'There is no deletion request waiting for this order.');
         $yes = !empty($d['approve']);
+        $asked = q_one("SELECT req_user FROM approvals WHERE ref=? AND kind='order_delete' AND status='pending' ORDER BY id DESC LIMIT 1", [$oid]);
         q_exec('UPDATE orders SET del_state=?,del_decided_by=?,del_decided_at=? WHERE id=?', [$yes ? 'approved' : 'rejected', $me['name'], now(), $oid]);
-        notify('order', ($yes ? 'Deletion approved' : 'Deletion rejected') . " - $oid", $me['name'] . ($yes ? ' approved the deletion requested by ' : ' rejected the deletion requested by ') . $r['del_by'] . '.', $oid);
+        approval_decide($oid, ['order_delete'], $yes ? 'approved' : 'rejected', $me['name']);
+        // the answer goes only to the staff member who asked (everybody else sees it in the approvals list)
+        notify('order', ($yes ? 'Deletion approved' : 'Deletion rejected') . " - $oid", $me['name'] . ($yes ? ' approved' : ' rejected') . ' your request to delete this order.', $oid,
+            $asked ? (int)$asked['req_user'] : null, !$asked);
         log_admin($yes ? 'order.delete_approve' : 'order.delete_reject', "$oid: " . ($yes ? 'approved' : 'rejected') . ' (requested by ' . $r['del_by'] . ')');
         return [200, ['order' => order_out(order_by_id($oid), true)]];
     }
@@ -436,29 +523,45 @@ function handle_api($method, $route, $body)
         return ['raw', file_get_contents($path), $types[$ext] ?? 'application/octet-stream', basename($path)];
     }
 
+    /* what each admin may see: shared notices, owner-only notices (owners), and notices addressed to this admin only */
+    $notif_vis = function ($me) { return ['((to_user IS NULL AND (owners_only=0 OR ?=1)) OR to_user=?)', [is_owner($me) ? 1 : 0, (int)$me['id']]]; };
     if ($R('GET', 'admin/notifications')) {
-        $after = (int)qs('after', '0');
+        $me = current_user(); $after = (int)qs('after', '0');
+        list($vis, $vp) = $notif_vis($me);
         $fix = function ($r) { $r['id'] = (int)$r['id']; $r['created'] = (int)$r['created']; $r['read'] = (int)$r['read']; return $r; };
-        $items = array_map($fix, q_all('SELECT * FROM notifications WHERE id>? ORDER BY id DESC LIMIT 100', [$after]));
-        $recent = $after === 0 ? array_map($fix, q_all('SELECT * FROM notifications ORDER BY id DESC LIMIT 30')) : [];
+        $items = array_map($fix, q_all("SELECT * FROM notifications WHERE $vis AND id>? ORDER BY id DESC LIMIT 100", array_merge($vp, [$after])));
+        $recent = $after === 0 ? array_map($fix, q_all("SELECT * FROM notifications WHERE $vis ORDER BY id DESC LIMIT 30", $vp)) : [];
         return [200, ['items' => $items, 'recent' => $recent,
-            'unread' => (int)q_val('SELECT COUNT(*) FROM notifications WHERE `read`=0'),
-            'latest' => (int)q_val('SELECT COALESCE(MAX(id),0) FROM notifications'),
+            'unread' => (int)q_val("SELECT COUNT(*) FROM notifications WHERE $vis AND `read`=0", $vp),
+            'latest' => (int)q_val("SELECT COALESCE(MAX(id),0) FROM notifications WHERE $vis", $vp),
             'chatUnread' => (int)q_val("SELECT COUNT(*) FROM messages WHERE sender='customer' AND seen=0")]];
     }
-    if ($R('POST', 'admin/notifications/read')) { q_exec('UPDATE notifications SET `read`=1'); return [200, ['ok' => true]]; }
-    if ($R('POST', 'admin/notifications/delete')) {   // remove unwanted notifications: ?mode = read | all | ids
-        $d = $json(); $mode = str_val($d['mode'] ?? ''); $n = 0;
-        if ($mode === 'read') $n = q_exec('DELETE FROM notifications WHERE `read`=1');
-        elseif ($mode === 'all') $n = q_exec('DELETE FROM notifications');
-        elseif ($mode === 'ids' && is_array($d['ids'] ?? null)) { foreach ($d['ids'] as $i) $n += q_exec('DELETE FROM notifications WHERE id=?', [(int)$i]); }
+    if ($R('POST', 'admin/notifications/read')) {
+        list($vis, $vp) = $notif_vis(current_user());
+        q_exec("UPDATE notifications SET `read`=1 WHERE $vis", $vp); return [200, ['ok' => true]];
+    }
+    if ($R('POST', 'admin/notifications/delete')) {   // remove unwanted notifications (only the ones this admin can see): ?mode = read | all | ids
+        $me = current_user(); $d = $json(); $mode = str_val($d['mode'] ?? ''); $n = 0;
+        list($vis, $vp) = $notif_vis($me);
+        if ($mode === 'read') $n = q_exec("DELETE FROM notifications WHERE $vis AND `read`=1", $vp);
+        elseif ($mode === 'all') $n = q_exec("DELETE FROM notifications WHERE $vis", $vp);
+        elseif ($mode === 'ids' && is_array($d['ids'] ?? null)) { foreach ($d['ids'] as $i) $n += q_exec("DELETE FROM notifications WHERE id=? AND $vis", array_merge([(int)$i], $vp)); }
         else throw new ApiError(400, 'Choose what to delete.');
         log_admin('notifications.delete', "$mode: $n removed");
         return [200, ['ok' => true, 'deleted' => $n]];
     }
     if ($R('DELETE', 'admin/notifications/(\d+)')) {
-        q_exec('DELETE FROM notifications WHERE id=?', [(int)$m[1]]);
+        list($vis, $vp) = $notif_vis(current_user());
+        q_exec("DELETE FROM notifications WHERE id=? AND $vis", array_merge([(int)$m[1]], $vp));
         return [200, ['ok' => true]];
+    }
+
+    /* approvals: owners see every request; staff see their own open requests and every decided one (with who asked) */
+    if ($R('GET', 'admin/approvals')) {
+        return [200, ['approvals' => array_map(function ($r) {
+            return ['id' => (int)$r['id'], 'kind' => $r['kind'], 'ref' => $r['ref'], 'title' => $r['title'], 'detail' => $r['detail'], 'status' => $r['status'],
+                'by' => $r['req_name'], 'byId' => (int)$r['req_user'], 'decidedBy' => (string)$r['decided_by'], 'created' => (int)$r['created'], 'decidedAt' => (int)$r['decided_at']];
+        }, approval_list(current_user()))]];
     }
 
     if ($R('GET', 'admin/chats')) {
@@ -530,7 +633,8 @@ function handle_api($method, $route, $body)
                 json_encode($c['images'], JSON_UNESCAPED_SLASHES), $c['size'] ?? '', $c['includes'] ?? '']);
         if (!$owner) {                                     // staff: the item stays hidden until the owner approves it
             q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode(['active' => 1]), $me['name'], now(), $id]);
-            notify('product', 'New item waiting for approval', $me['name'] . ' added "' . $c['name'] . '" (' . $c['price'] . ' ' . CURRENCY . '). It is hidden until you approve it.', (string)$id);
+            approval_add('product_add', $id, 'New item: ' . $c['name'], $c['price'] . ' ' . CURRENCY . ' · hidden until the owner approves it', $me);
+            notify('product', 'New item waiting for approval', $me['name'] . ' added "' . $c['name'] . '" (' . $c['price'] . ' ' . CURRENCY . '). It is hidden until you approve it.', (string)$id, null, true);
         }
         log_admin('product.add', $c['name'] . ' (' . $c['price'] . ' QAR, stock ' . ($c['stock'] ?? 0) . ')' . ($owner ? '' : ' - waiting for owner approval'));
         return [200, ['ok' => true, 'pending' => !$owner]];
@@ -555,7 +659,8 @@ function handle_api($method, $route, $body)
             $merged = array_merge(is_array($old) ? $old : [], $ask);
             q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $me['name'], now(), (int)$row['id']]);
             $what = implode('; ', describe_product_changes($row, $ask));
-            notify('product', 'Item change waiting for approval - ' . $row['name'], $me['name'] . ' asks to change: ' . $what, (string)$row['id']);
+            approval_add('product_change', $row['id'], 'Change: ' . $row['name'], $what, $me);
+            notify('product', 'Item change waiting for approval - ' . $row['name'], $me['name'] . ' asks to change: ' . $what, (string)$row['id'], null, true);
             log_admin('product.change_request', $row['name'] . ' - ' . $what);
         }
         $gone = (array_key_exists('stock', $direct) && (int)$direct['stock'] <= 0) ? sweep_soldout() : 0;
@@ -572,7 +677,10 @@ function handle_api($method, $route, $body)
         if ($yes) apply_product_changes($row['id'], $req);
         q_exec('UPDATE products SET req_json=NULL,req_by=NULL,req_at=NULL WHERE id=?', [(int)$row['id']]);
         $owner = current_user();
-        notify('product', ($yes ? 'Item change approved' : 'Item change rejected') . ' - ' . $row['name'], $owner['name'] . ($yes ? ' approved' : ' rejected') . ' the change requested by ' . $row['req_by'] . '.', (string)$row['id']);
+        $asked = q_one("SELECT req_user FROM approvals WHERE ref=? AND kind IN ('product_change','product_add') AND status='pending' ORDER BY id DESC LIMIT 1", [(string)$row['id']]);
+        approval_decide((string)$row['id'], ['product_change', 'product_add'], $yes ? 'approved' : 'rejected', $owner['name']);
+        notify('product', ($yes ? 'Item change approved' : 'Item change rejected') . ' - ' . $row['name'], $owner['name'] . ($yes ? ' approved' : ' rejected') . ' your change request.', (string)$row['id'],
+            $asked ? (int)$asked['req_user'] : null, !$asked);
         log_admin($yes ? 'product.change_approve' : 'product.change_reject', $row['name'] . ' - ' . $what . ' (requested by ' . $row['req_by'] . ')');
         if ($yes) sweep_soldout();
         return [200, ['product' => $prod_out(q_one('SELECT * FROM products WHERE id=?', [(int)$row['id']]))]];
@@ -643,6 +751,18 @@ function handle_api($method, $route, $body)
             $s['google']['clientId'] = $gid;
         }
         $pemToWrite = null;
+        $cd = is_array($pay['card'] ?? null) ? $pay['card'] : [];           // card payments (hosted page of the payment provider)
+        if (array_key_exists('test', $cd)) $s['payments']['card']['test'] = (bool)$cd['test'];
+        if (!empty($cd['apiToken'])) $s['payments']['card']['apiToken'] = clean($cd['apiToken'], 300);   // blank = keep the saved token
+        if (array_key_exists('enabled', $cd)) $s['payments']['card']['enabled'] = (bool)$cd['enabled'];
+        if (!empty($s['payments']['card']['enabled']) && str_val($s['payments']['card']['apiToken']) === '')
+            throw new ApiError(400, 'Card payments cannot be switched on yet. Paste the API token from your payment provider first.');
+        $en = is_array($d['enquiry'] ?? null) ? $d['enquiry'] : [];           // the reply text for enquiries
+        if (array_key_exists('template', $en)) {
+            $t = clean($en['template'], 900);
+            if ($t === '') throw new ApiError(400, 'The reply text cannot be empty.');
+            $s['enquiry']['template'] = $t;
+        }
         if (array_key_exists('applepay', $d) && is_array($d['applepay'])) {
             $ai = $d['applepay'];
             $a = &$s['applepay'];
@@ -728,8 +848,41 @@ function handle_api($method, $route, $body)
         return [200, ['settings' => $out]];
     }
 
+    /* enquiries as an inbox: each enquiry is a conversation (the customer's message, reference photos, and every reply) */
+    $enq_out = function ($r) {
+        $r['id'] = (int)$r['id']; $r['created'] = (int)$r['created'];
+        $imgs = array_values(array_filter((array)json_decode((string)($r['images'] ?? ''), true), 'is_string'));
+        $r['images'] = array_map(function ($i, $n) use ($r) { return ['n' => $n + 1, 'url' => '/api/admin/enquiries/' . $r['id'] . '/image/' . ($n + 1)]; }, $imgs, array_keys($imgs));
+        $r['reply'] = enquiry_reply_text($r);                       // the default WhatsApp / SMS text, ready to send
+        $r['messages'] = array_map(function ($x) { return ['id' => (int)$x['id'], 'sender' => $x['sender'], 'channel' => $x['channel'], 'body' => $x['body'], 'by' => (string)$x['by_name'], 'created' => (int)$x['created']]; },
+            q_all('SELECT * FROM enquiry_msgs WHERE enquiry_id=? ORDER BY id', [$r['id']]));
+        return $r;
+    };
     if ($R('GET', 'admin/enquiries')) {
-        return [200, ['enquiries' => array_map(function ($r) { $r['id'] = (int)$r['id']; $r['created'] = (int)$r['created']; return $r; }, q_all('SELECT * FROM enquiries ORDER BY id DESC'))]];
+        return [200, ['enquiries' => array_map($enq_out, q_all('SELECT * FROM enquiries ORDER BY id DESC'))]];
+    }
+    if ($R('GET', 'admin/enquiries/(\d+)/image/(\d+)')) {   // a reference photo (admins only)
+        $r = q_one('SELECT images FROM enquiries WHERE id=?', [(int)$m[1]]);
+        $imgs = array_values(array_filter((array)json_decode((string)($r['images'] ?? ''), true), 'is_string'));
+        $f = $imgs[(int)$m[2] - 1] ?? null;
+        if (!$f) throw new ApiError(404, 'Photo not found');
+        $path = enquiry_image_dir() . '/' . basename($f);
+        if (!is_file($path)) throw new ApiError(404, 'Photo not found');
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        return ['raw', file_get_contents($path), ['jpg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp'][$ext] ?? 'application/octet-stream', basename($path)];
+    }
+    if ($R('POST', 'admin/enquiries/(\d+)/messages')) {   // record a reply that was sent (WhatsApp / SMS) or an internal note
+        $me = current_user(); $d = $json(); $eid = (int)$m[1];
+        $enq = q_one('SELECT * FROM enquiries WHERE id=?', [$eid]);
+        if (!$enq) throw new ApiError(404, 'Enquiry not found');
+        $ch = str_val($d['channel'] ?? '');
+        if (!in_array($ch, ['whatsapp', 'sms', 'note'], true)) throw new ApiError(400, 'Choose WhatsApp, SMS or a note.');
+        $body = clean($d['body'] ?? '', 1500);
+        if ($body === '') throw new ApiError(400, 'Write the message first.');
+        q_exec('INSERT INTO enquiry_msgs(enquiry_id,sender,channel,body,by_name,created) VALUES(?,?,?,?,?,?)', [$eid, 'admin', $ch, $body, $me['name'], now()]);
+        if ($ch !== 'note' && $enq['status'] === 'New') q_exec("UPDATE enquiries SET status='Replied' WHERE id=?", [$eid]);
+        log_admin('enquiry.reply', "Enquiry #$eid: " . ($ch === 'note' ? 'note added' : 'replied by ' . ($ch === 'sms' ? 'SMS' : 'WhatsApp')));
+        return [200, ['enquiry' => $enq_out(q_one('SELECT * FROM enquiries WHERE id=?', [$eid]))]];
     }
     if ($R('PUT', 'admin/enquiries/(\d+)')) {
         $st = clean($json()['status'] ?? '', 20);
@@ -737,7 +890,8 @@ function handle_api($method, $route, $body)
         q_exec('UPDATE enquiries SET status=? WHERE id=?', [$st, (int)$m[1]]);
         return [200, ['ok' => true]];
     }
-    if ($R('DELETE', 'admin/enquiries/(\d+)')) {   // permanently remove an enquiry (and the contact details in it)
+    if ($R('DELETE', 'admin/enquiries/(\d+)')) {   // permanently remove an enquiry, its photos and its messages
+        delete_enquiry_files((int)$m[1]);
         q_exec('DELETE FROM enquiries WHERE id=?', [(int)$m[1]]);
         log_admin('enquiry.delete', 'Deleted enquiry #' . (int)$m[1]);
         return [200, ['ok' => true]];

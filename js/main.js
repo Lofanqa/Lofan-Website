@@ -286,19 +286,50 @@ function showCheckoutPopup() {
 }
 
 /* ---------- Enquiry form (goes to the admin) ---------- */
+/* Reference photos: shrunk in the browser (about 1400 px, JPEG) so they upload quickly */
+const ENQ_MAX_PHOTOS = 5;
+function shrinkPhoto(file, max = 1400) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('One of the photos could not be read. Please use JPG, PNG or WEBP.')); };
+    img.src = url;
+  });
+}
+$('#enqPhotos').addEventListener('change', e => {
+  const n = e.target.files.length;
+  $('#enqCount').textContent = n > ENQ_MAX_PHOTOS ? `Please choose up to ${ENQ_MAX_PHOTOS} photos (you chose ${n}).` : n ? `${n} photo${n === 1 ? '' : 's'} chosen` : '';
+});
 $('#enquiryForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const f = e.target, d = Object.fromEntries(new FormData(f)), note = $('#formNote');
+  const f = e.target, note = $('#formNote'), btn = $('button[type=submit]', f);
+  const v = { name: f.elements.name.value.trim(), company: f.elements.company.value.trim(), email: f.elements.email.value.trim(), phone: f.elements.phone.value.trim(),
+    type: f.elements.type.value, qty: f.elements.qty.value.trim(), message: f.elements.message.value.trim() };
+  const checks = {
+    name: v.name.length >= 2, email: /^\S+@\S+\.\S+$/.test(v.email), phone: v.phone.replace(/\D/g, '').length >= 7, message: v.message.length >= 5
+  };
   let ok = true;
-  ['name', 'email', 'phone', 'message'].forEach(k => {
-    const bad = !d[k].trim() || (k === 'email' && !/^\S+@\S+\.\S+$/.test(d[k]));
-    f.elements[k].classList.toggle('invalid', bad); if (bad) ok = false;
-  });
-  if (!ok) { note.className = 'note err'; note.textContent = 'Please complete the highlighted fields.'; return; }
+  Object.keys(checks).forEach(k => { f.elements[k].classList.toggle('invalid', !checks[k]); if (!checks[k]) ok = false; });
+  if (!ok) { note.className = 'note err'; note.textContent = 'Please complete the fields marked * (name, email, mobile number and message).'; return; }
+  const files = [...f.elements.photos.files];
+  if (files.length > ENQ_MAX_PHOTOS) { note.className = 'note err'; note.textContent = `Please choose up to ${ENQ_MAX_PHOTOS} reference photos.`; return; }
+  btn.disabled = true; note.className = 'note'; note.textContent = files.length ? 'Sending your enquiry and photos…' : 'Sending…';
   try {
-    await api('/enquiries', { method: 'POST', body: d });
-    note.className = 'note'; note.textContent = 'Thank you – our team will contact you shortly.'; f.reset();
-  } catch (err) { note.className = 'note err'; note.textContent = err.message; }
+    v.images = [];
+    for (const file of files) v.images.push({ data: await shrinkPhoto(file) });
+    await api('/enquiries', { method: 'POST', body: v });
+    note.className = 'note'; note.textContent = 'Thank you – our team will contact you shortly on WhatsApp or by phone.';
+    f.reset(); $('#enqCount').textContent = '';
+  } catch (err) {
+    note.className = 'note err'; note.textContent = err.message;
+    if (err.field && f.elements[err.field]) f.elements[err.field].classList.add('invalid');
+  }
+  btn.disabled = false;
 });
 
 /* ---------- Start ---------- */

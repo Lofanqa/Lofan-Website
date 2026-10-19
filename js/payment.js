@@ -96,6 +96,7 @@ async function stepPay() {
     <div><span class="muted small">Pay to</span><strong>${esc(info.company.name)}</strong>${info.company.crNumber ? `<small class="muted"> CR ${esc(info.company.crNumber)}</small>` : ''}</div>
   </div>
   <p class="gate-note">Your items are reserved for you. <strong>Your order is confirmed only after your payment is verified.</strong></p>
+  ${new URLSearchParams(location.search).get('failed') === '1' ? '<p class="gate-note err-note">The card payment was not completed, so nothing was charged. Your items are still reserved for you – you can try again or choose another method.</p>' : ''}
   <form id="payForm" class="co-grid" novalidate>
     <div class="co-col">
       <h3>1. Choose how to pay</h3>
@@ -110,6 +111,14 @@ async function stepPay() {
               : `<p class="wallet-note">Apple Pay works on <strong>Safari</strong> on iPhone, iPad or Mac with a card in Apple Wallet. Please open this page there, or choose another payment method.</p>`}
             <p class="note" id="apNote"></p>
           </div>
+        </div>` : m.card ? `
+        <div class="pay-panel" data-pay="${m.id}" ${i ? 'hidden' : ''}>
+          <p class="muted small">${esc(m.hint)}</p>
+          <div class="wallet-box">
+            <button type="button" class="btn full" id="cardBtn">Pay securely by card <b>&rarr;</b></button>
+            <p class="muted small center">Total <strong>${money(order.total)}</strong> · you will be taken to the payment provider's secure page.</p>
+            <p class="note" id="cardNote"></p>
+          </div>
         </div>` : `
         <div class="pay-panel" data-pay="${m.id}" ${i ? 'hidden' : ''}>
           <p class="muted small">${esc(m.hint)}</p>
@@ -120,7 +129,7 @@ async function stepPay() {
           </div>
         </div>`).join('')}
     </div>
-    <div class="co-col" id="manualPay" ${info.methods[0].wallet ? 'hidden' : ''}>
+    <div class="co-col" id="manualPay" ${info.methods[0].wallet || info.methods[0].card ? 'hidden' : ''}>
       <h3>2. Confirm your payment</h3>
       <p class="muted small">After sending the money, enter the transaction number shown on your bank / Ooredoo Money receipt so we can verify it quickly.</p>
       <label>Transaction / reference number<input name="txn" placeholder="e.g. FT26279XXXXX" required></label>
@@ -133,9 +142,11 @@ async function stepPay() {
   $('#payForm').addEventListener('change', e => {
     if (e.target.name !== 'method') return;
     $$('.pay-panel').forEach(p => { p.hidden = p.dataset.pay !== e.target.value; });
-    $('#manualPay').hidden = !!(info.methods.find(m => m.id === e.target.value) || {}).wallet;   // wallets pay instantly – no receipt needed
+    const pick = info.methods.find(m => m.id === e.target.value) || {};
+    $('#manualPay').hidden = !!(pick.wallet || pick.card);   // wallets and cards pay on the spot – no receipt needed
   });
   const ap = $('#apBtn'); if (ap) ap.addEventListener('click', startApplePay);
+  const cb = $('#cardBtn'); if (cb) cb.addEventListener('click', startCard);
   view.addEventListener('click', e => {
     const c = e.target.closest('.copy');
     if (c) navigator.clipboard?.writeText(c.dataset.copy).then(() => toast('Copied'), () => toast('Copy failed'));
@@ -161,6 +172,20 @@ async function stepPay() {
       order = r.order; stepDone();
     } catch (err) { fail(note, err.message); btn.disabled = false; }
   });
+}
+
+/* ---------- Card payment: the server opens the provider's secure page; the card is entered only there ---------- */
+async function startCard() {
+  const note = $('#cardNote'), b = $('#cardBtn');
+  note.className = 'note'; note.textContent = '';
+  b.disabled = true; b.textContent = 'Opening the secure payment page…';
+  try {
+    const r = await api(`/orders/${order.id}/card/start`, { method: 'POST' });
+    location.href = r.url;                                     // leaves this website for the provider's page
+  } catch (err) {
+    note.className = 'note err'; note.textContent = err.message;
+    b.disabled = false; b.innerHTML = 'Pay securely by card <b>&rarr;</b>';
+  }
 }
 
 /* ---------- Apple Pay (Safari on iPhone / iPad / Mac with a card in Wallet) ---------- */

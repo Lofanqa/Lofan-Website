@@ -27,7 +27,8 @@ async function gate() {
       <label>Admin email<input name="id" type="email" autocomplete="username" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn full" type="submit">Sign In</button><p class="note" id="gateNote"></p>
-    </form>` : `
+    </form>
+    <p class="small center"><a class="ulink" href="#" id="forgotLink">Forgot password? Get a code by e-mail</a></p>` : `
     <h2>Create the <em>admin account</em></h2>
     <p class="muted small">First-time setup. This account manages orders, stock and company payment details. Keep the password safe.</p>
     <form id="setupForm" novalidate>
@@ -45,8 +46,48 @@ async function gate() {
       state.user = r.user; start();
     } catch (err) { note.textContent = err.message; note.classList.add('err'); }
   };
-  if (hasAdmin) $('#loginForm').addEventListener('submit', submit('/login'));
+  if (hasAdmin) {
+    $('#loginForm').addEventListener('submit', submit('/login'));
+    $('#forgotLink').addEventListener('click', e => { e.preventDefault(); forgotStep1(); });
+  }
   else $('#setupForm').addEventListener('submit', submit('/admin/setup'));
+}
+
+/* "Forgot password?" on the sign-in page: 1) enter the admin e-mail, 2) enter the code and a new password */
+function forgotStep1() {
+  $('#gateBody').innerHTML = `
+    <h2>Reset <em>password</em></h2>
+    <p class="muted small">Enter your admin e-mail. If it belongs to an admin account, a 6-digit code is sent to it.</p>
+    <form id="forgotForm" novalidate>
+      <label>Admin e-mail<input name="email" type="email" autocomplete="username" required></label>
+      <button class="btn full" type="submit">Send me a code</button><p class="note" id="gateNote"></p>
+    </form>
+    <p class="small center"><a class="ulink" href="#" id="backLogin">Back to sign in</a></p>`;
+  $('#forgotForm').addEventListener('submit', async e => {
+    e.preventDefault(); const note = $('#gateNote'); note.className = 'note';
+    const email = String(new FormData(e.target).get('email') || '').trim();
+    try { const r = await api('/auth/otp/request', { method: 'POST', body: { email } }); forgotStep2(email, r.message); }
+    catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+  $('#backLogin').addEventListener('click', e => { e.preventDefault(); gate(); });
+}
+function forgotStep2(email, message) {
+  $('#gateBody').innerHTML = `
+    <h2>Enter the <em>code</em></h2>
+    <p class="muted small">${esc(message)}</p>
+    <form id="codeForm" novalidate>
+      <label>6-digit code<input name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></label>
+      <label>New password (8+ characters, letters and numbers)<input name="password" type="password" autocomplete="new-password" required></label>
+      <button class="btn full" type="submit">Set new password</button><p class="note" id="gateNote"></p>
+    </form>
+    <p class="small center"><a class="ulink" href="#" id="backLogin">Back to sign in</a></p>`;
+  $('#codeForm').addEventListener('submit', async e => {
+    e.preventDefault(); const note = $('#gateNote'); note.className = 'note';
+    const v = Object.fromEntries(new FormData(e.target));
+    try { await api('/auth/otp/confirm', { method: 'POST', body: { email, code: v.code, password: v.password } }); toast('Password changed – sign in with your new password'); gate(); }
+    catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+  $('#backLogin').addEventListener('click', e => { e.preventDefault(); gate(); });
 }
 
 function start() {
@@ -107,7 +148,7 @@ async function poll(first) {
       d.items.slice().reverse().forEach(popup); beep();
       if (tab === 'orders') renderOrders(true);
       if (tab === 'notifs') renderNotifs();
-      if (tab === 'enquiries') renderEnquiries();
+      if (tab === 'enquiries' && !(document.activeElement && document.activeElement.closest && document.activeElement.closest('#enqPane'))) renderEnquiries();   // never wipe a reply being typed
     }
     const b = $('#badgeNotifs'); b.hidden = !d.unread; b.textContent = d.unread;
     const cb = $('#badgeChats'); cb.hidden = !d.chatUnread; cb.textContent = d.chatUnread;
@@ -124,9 +165,28 @@ async function updateOrderBadge() {
   } catch { /* ignore */ }
 }
 
+/* Approvals: what staff asked for and what the owner decided. Owners see every open request; staff see their own open
+   requests; every admin sees the decided ones with the name of the person who asked. */
+const APPROVAL_KIND = { order_delete: 'Delete order', product_change: 'Item change', product_add: 'New item' };
+function approvalsHTML(list) {
+  if (!list.length) return '<p class="muted small">No approvals yet.</p>';
+  return list.map(a => {
+    const chip = a.status === 'pending' ? '<em class="low-tag">Waiting for the owner</em>'
+      : a.status === 'approved' ? '<em class="sold-tag" style="background:#d8e2c4;color:#3d5028">Approved</em>' : '<em class="sold-tag">Rejected</em>';
+    return `<div class="ord"><div class="ord-top"><strong>${esc(APPROVAL_KIND[a.kind] || a.kind)} – ${esc(a.title)}</strong>${chip}</div>
+      <p class="small">${esc(a.detail)}</p>
+      <p class="muted small">Asked by <strong>${esc(a.by)}</strong> · ${fmtDate(a.created)}${a.decidedBy ? ` · ${a.status === 'approved' ? 'approved' : 'rejected'} by <strong>${esc(a.decidedBy)}</strong> · ${fmtDate(a.decidedAt)}` : ''}</p>
+      ${isOwner() && a.status === 'pending' ? `<button class="btn ghost" data-go="${a.kind === 'order_delete' ? 'orders' : 'products'}">Open to decide</button>` : ''}</div>`;
+  }).join('');
+}
 async function renderNotifs() {
-  const d = await api('/admin/notifications?after=0');
-  panel(`<div class="adm-save"><div><strong>${d.unread ? d.unread + ' unread' : 'All caught up'}</strong><p class="muted small">New orders, payment submissions and enquiries appear here and pop up instantly while this page is open. Remove the ones you don't need.</p></div>
+  const [d, ap] = await Promise.all([api('/admin/notifications?after=0'), api('/admin/approvals')]);
+  const open = ap.approvals.filter(a => a.status === 'pending').length;
+  panel(`<h3>Approvals ${open && isOwner() ? `<span class="badge">${open}</span>` : ''}</h3>
+    <p class="muted small">${isOwner() ? 'Everything your staff asked for. Approve or reject it in the Orders or Products tab.' : 'Your requests and the decisions made on them. Staff can delete an order only after the owner approves it.'}</p>
+    ${approvalsHTML(ap.approvals)}
+    <h3>Notifications</h3>
+    <div class="adm-save"><div><strong>${d.unread ? d.unread + ' unread' : 'All caught up'}</strong><p class="muted small">New orders, payment submissions and enquiries appear here and pop up instantly while this page is open. Remove the ones you don't need.</p></div>
     <div class="adm-btns"><button class="btn ghost" id="markRead">Mark all as read</button>
       <button class="btn ghost danger-text" id="delRead">Delete read</button><button class="btn danger" id="delAll">Delete all</button></div></div>
     ${d.recent.length ? d.recent.map(n => `<div class="ord ${n.read ? '' : 'unread'}"><div class="ord-top"><strong>${esc(n.title)}</strong>
@@ -139,6 +199,7 @@ async function renderNotifs() {
   $('#delRead').addEventListener('click', bulk('read', 'Delete all notifications you have already read?'));
   $('#delAll').addEventListener('click', bulk('all', 'Delete ALL notifications? This cannot be undone.'));
   $('#panel').onclick = async e => {
+    if (e.target.dataset.go) { showTab(e.target.dataset.go); return; }
     const id = e.target.dataset.delnotif; if (!id) return;
     await api('/admin/notifications/' + id, { method: 'DELETE' }); poll(); renderNotifs();
   };
@@ -175,7 +236,7 @@ async function renderOverview() {
 
 /* ---------- orders ---------- */
 let orderSearch = '', ordersData = null, companyInfo = null;
-async function getCompany() { if (!companyInfo) companyInfo = (await api('/admin/settings')).settings.company; return companyInfo; }
+async function getCompany() { if (!companyInfo) companyInfo = (await api('/products')).company; return companyInfo; }   // public company details (same for staff and owner)
 const csvText = rows => '﻿' + rows.map(r => r.map(x => `"${String(x ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
 function downloadFile(name, text) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' })); a.download = name; a.click();
@@ -223,8 +284,9 @@ function deleteBox(o) {
     return `<div class="ord-actions"><button class="btn ghost danger-text" data-delorder="${o.id}">Delete order</button>${approved ? `<small class="muted">Approved for ${esc(r.by)} by ${esc(r.decidedBy)}</small>` : ''}</div>`;
   }
   if (r && r.state === 'pending') return `<div class="del-box">⏳ Deletion requested – waiting for the owner's approval. ${when(r.at)}</div>`;
-  if (approved) return `<div class="del-box ok">✅ Approved by <strong>${esc(r.decidedBy)}</strong>. You can delete this order now.
+  if (approved && r.by === state.user.name) return `<div class="del-box ok">✅ Approved by <strong>${esc(r.decidedBy)}</strong>. You can delete this order now.
     <div class="ord-actions"><button class="btn danger" data-delorder="${o.id}">Delete order</button></div></div>`;
+  if (approved) return `<div class="del-box">The deletion was approved for <strong>${esc(r.by)}</strong>. Only that staff member can delete this order.</div>`;
   const rejected = r && r.state === 'rejected' ? `<div class="del-box no">❌ The owner (${esc(r.decidedBy)}) rejected the deletion request. ${when(r.decidedAt)}</div>` : '';
   return rejected + `<div class="ord-actions"><button class="btn ghost danger-text" data-reqdel="${o.id}">Request deletion</button><small class="muted">Staff accounts need the owner's approval to delete an order.</small></div>`;
 }
@@ -516,19 +578,93 @@ async function resizeImage(file, max = 1200) {
 }
 
 /* ---------- enquiries & customers ---------- */
+/* Enquiries as an inbox: left = every enquiry, right = the whole conversation (the customer's message and photos,
+   and every reply you sent on WhatsApp or SMS). Replies open WhatsApp / SMS with the text ready to send. */
+let enqSel = null, enqData = [];
+const enqDigits = q => { const d = String(q.phone || '').replace(/\D/g, ''); return d.length === 8 ? '974' + d : d; };
 async function renderEnquiries() {
   const { enquiries } = await api('/admin/enquiries');
-  panel(enquiries.length ? enquiries.map(q => `<div class="ord"><div class="ord-top"><strong>${esc(q.name)}${q.company ? ' · ' + esc(q.company) : ''}</strong>
-      <span class="ord-right"><select data-enq="${q.id}">${['New', 'Replied', 'Closed'].map(s => `<option ${s === q.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
-      <button class="rm danger-text" data-del-enq="${q.id}">Delete</button></span></div>
-      <p class="small">${esc(q.type)}${q.qty ? ' · ' + esc(q.qty) : ''} · ${fmtDate(q.created)}</p><p>${esc(q.message)}</p>
-      <p class="muted small">${esc(q.email)} · <a class="ulink" href="tel:${esc(q.phone)}">${esc(q.phone)}</a></p></div>`).join('') : '<p class="muted">No enquiries yet.</p>');
-  $('#panel').onchange = async e => { if (e.target.dataset.enq) { await api('/admin/enquiries/' + e.target.dataset.enq, { method: 'PUT', body: { status: e.target.value } }); toast('Updated'); } };
-  $('#panel').onclick = async e => {
-    const id = e.target.dataset.delEnq; if (!id) return;
-    if (!confirm('Delete this enquiry and the contact details in it permanently?')) return;
-    await api('/admin/enquiries/' + id, { method: 'DELETE' }); toast('Enquiry deleted'); renderEnquiries();
+  enqData = enquiries;
+  if (!enquiries.length) { panel('<p class="muted">No enquiries yet. When a customer sends the Custom Order form, it appears here.</p>'); return; }
+  if (!enqSel || !enquiries.some(q => q.id === enqSel)) enqSel = enquiries[0].id;
+  panel(`<div class="chat-admin enq-inbox">
+    <aside class="chat-list" id="enqList"></aside>
+    <section class="chat-pane" id="enqPane"></section></div>`);
+  drawEnqList(); drawEnqPane();
+  $('#enqList').addEventListener('click', e => {
+    const b = e.target.closest('[data-enq-id]'); if (!b) return;
+    enqSel = +b.dataset.enqId; drawEnqList(); drawEnqPane();
+  });
+}
+function drawEnqList() {
+  $('#enqList').innerHTML = enqData.map(q => {
+    const last = q.messages[q.messages.length - 1];
+    return `<button class="thread ${q.id === enqSel ? 'on' : ''}" data-enq-id="${q.id}">
+      <strong>${esc(q.name)}${q.company ? ' · ' + esc(q.company) : ''}</strong>${q.status === 'New' ? '<b class="badge">New</b>' : ''}
+      <small>${esc(q.type || 'Enquiry')} · ${fmtDate(q.created)}</small>
+      <small>${esc(last ? (last.sender === 'admin' ? 'You: ' : '') + last.body : '').slice(0, 70)}</small></button>`;
+  }).join('');
+}
+function enqBubble(q, m) {
+  const mine = m.sender === 'admin';
+  const tag = m.channel === 'whatsapp' ? 'WhatsApp' : m.channel === 'sms' ? 'SMS' : m.channel === 'note' ? 'internal note' : 'website form';
+  return `<div class="msg ${mine ? 'me' : 'them'} ${m.channel === 'note' ? 'note-msg' : ''}"><p>${esc(m.body)}</p>
+    <small>${mine ? esc(m.by) + ' · ' : esc(q.name) + ' · '}${tag} · ${fmtDate(m.created)}</small></div>`;
+}
+function drawEnqPane() {
+  const q = enqData.find(x => x.id === enqSel); if (!q) return;
+  const intl = enqDigits(q);
+  const photos = q.images.length ? `<div class="enq-photos">${q.images.map(im => `<a href="${esc(im.url)}" target="_blank" rel="noopener" title="Open photo ${im.n}"><img src="${esc(im.url)}" alt="Reference photo ${im.n}" loading="lazy"></a>`).join('')}</div>` : '';
+  const thread = q.messages.map(m => {
+    if (m === q.messages[0]) return `<div class="msg them"><p>${esc(m.body)}</p>${photos}<small>${esc(q.name)} · website form · ${fmtDate(m.created)}</small></div>`;
+    return enqBubble(q, m);
+  }).join('');
+  $('#enqPane').innerHTML = `
+    <div class="chat-head"><div><strong>${esc(q.name)}</strong><small class="muted"> ${q.phone ? '+' + esc(intl) : ''} · ${esc(q.email)}${q.company ? ' · ' + esc(q.company) : ''}</small></div>
+      <span class="chat-head-btns"><select id="enqStatus" aria-label="Status">${['New', 'Replied', 'Closed'].map(s => `<option ${s === q.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <button class="btn ghost danger-text" id="enqDel">Delete enquiry</button></span></div>
+    <p class="muted small enq-meta">${esc(q.type || 'Enquiry')}${q.qty ? ' · quantity: ' + esc(q.qty) : ''} · received ${fmtDate(q.created)}</p>
+    <div class="chat-body" id="enqBody">${thread}</div>
+    <div class="enq-reply">
+      <label>Reply to ${esc(q.name.split(' ')[0])} – the text is ready, edit it if you like<textarea id="enqText" rows="4" maxlength="900">${esc(q.reply)}</textarea></label>
+      <div class="enq-btns">
+        <button class="btn" id="enqWa">Send on WhatsApp</button>
+        <button class="btn ghost" id="enqSms">Send by SMS</button>
+        <button class="btn ghost" id="enqNote">Save as internal note</button>
+      </div>
+      <p class="note" id="enqNoteOut"></p>
+    </div>`;
+  const body = $('#enqBody'); body.scrollTop = body.scrollHeight;
+  const text = () => $('#enqText').value.trim();
+  const saved = async (channel, body2) => {
+    try { await api(`/admin/enquiries/${q.id}/messages`, { method: 'POST', body: { channel, body: body2 } }); await renderEnquiries(); }
+    catch (err) { $('#enqNoteOut').textContent = err.message; $('#enqNoteOut').className = 'note err'; }
   };
+  $('#enqWa').addEventListener('click', async () => {
+    if (!text()) return toast('Write the reply first');
+    if (!intl) return toast('This enquiry has no mobile number');
+    window.open(`https://wa.me/${intl}?text=${encodeURIComponent(text())}`, '_blank', 'noopener');   // opens WhatsApp with the text filled in
+    await saved('whatsapp', text());
+  });
+  $('#enqSms').addEventListener('click', async () => {
+    if (!text()) return toast('Write the reply first');
+    if (!intl) return toast('This enquiry has no mobile number');
+    location.href = `sms:+${intl}?body=${encodeURIComponent(text())}`;   // opens the phone's messages app
+    await saved('sms', text());
+  });
+  $('#enqNote').addEventListener('click', async () => {
+    if (!text()) return toast('Write the note first');
+    await saved('note', text());
+  });
+  $('#enqStatus').addEventListener('change', async e => {
+    try { await api('/admin/enquiries/' + q.id, { method: 'PUT', body: { status: e.target.value } }); q.status = e.target.value; drawEnqList(); toast('Status saved'); }
+    catch (err) { toast(err.message); }
+  });
+  $('#enqDel').addEventListener('click', async () => {
+    if (!confirm('Delete this enquiry, its photos and the whole conversation permanently?')) return;
+    try { await api('/admin/enquiries/' + q.id, { method: 'DELETE' }); enqSel = null; toast('Enquiry deleted'); renderEnquiries(); }
+    catch (err) { toast(err.message); }
+  });
 }
 
 let customersData = [], customerSearch = '';
@@ -711,6 +847,25 @@ async function renderSettings() {
       <label>Google Client ID<input name="google.clientId" value="${v((s.google || {}).clientId)}" placeholder="1234567890-abc123.apps.googleusercontent.com"></label>
     </div>
 
+    <h3>Card payments (secure online)</h3>
+    ${(() => {
+      const c = (s.payments || {}).card || {};
+      return `<p class="muted small">Lets customers pay by bank card on the <strong>secure page of your payment provider</strong>. Card numbers are typed only on that page and are never stored here. The money is paid into the bank account you link with the provider (use a QAR merchant account – for example MyFatoorah works with Qatari banks; ask your bank which provider they recommend).</p>
+      <div class="set-warn">Before you switch this on: open a merchant account with the provider, check that its currency is <strong>QAR</strong>, and paste the <strong>API token</strong> from its dashboard below. Keep the token private – do not send it by e-mail or WhatsApp.</div>
+      <label class="chk"><input type="checkbox" name="payments.card.enabled" ${c.enabled ? 'checked' : ''}> Offer card payment at checkout</label>
+      <div class="set-grid">
+        <label>API token ${c.hasToken ? '<small class="hint good">✓ saved – leave blank to keep it</small>' : ''}<input type="password" name="payments.card.apiToken" autocomplete="new-password" placeholder="${c.hasToken ? 'Saved – leave blank to keep' : 'paste the token from the provider'}"></label>
+        <label class="chk"><input type="checkbox" name="payments.card.test" ${c.test !== false ? 'checked' : ''}> Test mode (sandbox – no real money)</label>
+      </div>`;
+    })()}
+
+    <h3>Enquiry reply text (WhatsApp / SMS)</h3>
+    ${(() => {
+      const en = s.enquiry || {};
+      return `<p class="muted small">This is the message that is ready when you answer a customer's Custom Order enquiry. <strong>{name}</strong> becomes the customer's first name and <strong>{topic}</strong> what they asked about (for example "about commercial / bulk order"). You can still edit it for each reply.</p>
+      <label>Reply text<textarea name="enquiry.template" rows="5" maxlength="900">${v(en.template)}</textarea></label>`;
+    })()}
+
     <h3>Apple Pay</h3>
     ${(() => {
       const a = s.applepay || {}, miss = a.missing || [];
@@ -843,8 +998,70 @@ const ACTION_LABEL = {
   'chat.delete': 'Chat message deleted', 'chat.clear': 'Chat cleared', reset: 'DATA RESET', 'session.revoke': 'Session signed out', 'session.revokeAll': 'Sessions signed out',
   'alert.whatsapp': 'WhatsApp alert', 'alert.sms': 'SMS alert (old)', 'alert.telegram': 'Telegram alert', 'alert.test': 'Alert test'
 };
+/* Password reset with a code e-mailed to the admin's own login address (used on the security page and on the sign-in page). */
+function otpBlockHTML() {
+  return `<h3>Forgot your password? Reset it with a code</h3>
+    <p class="muted small">We e-mail a 6-digit code to <strong>${esc(state.user.email)}</strong>. Enter it below with your new password. The code is valid for 10 minutes and can be used once.</p>
+    <button class="btn ghost" id="otpSend" type="button">Send me a code by e-mail</button>
+    <form id="otpForm" class="set-pw" hidden novalidate>
+      <div class="set-grid">
+        <label>Code from the e-mail<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
+        <label>New password (8+ characters, letters and numbers)<input name="password" type="password" autocomplete="new-password" required></label>
+      </div>
+      <button class="btn" type="submit">Set new password</button><p class="note" id="otpNote"></p>
+    </form>`;
+}
+function bindOtp() {
+  const send = $('#otpSend'), form = $('#otpForm'); if (!send) return;
+  send.addEventListener('click', async () => {
+    send.disabled = true;
+    try {
+      const r = await api('/me/otp/request', { method: 'POST', body: {} });
+      form.hidden = false; $('#otpNote').className = 'note'; $('#otpNote').textContent = `The code was sent to ${r.sentTo}. Check your spam folder if it does not arrive.`;
+      toast('Code sent by e-mail');
+    } catch (err) { toast(err.message); }
+    send.disabled = false;
+  });
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); const note = $('#otpNote'); note.className = 'note';
+    const v = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/auth/otp/confirm', { method: 'POST', body: { email: state.user.email, code: v.code, password: v.password } });
+      toast('Password changed – please sign in again'); location.reload();
+    } catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+}
+/* Staff: their own account only – sign out, change password, reset with a code. Everything else is for the owner. */
+async function staffSecurity() {
+  panel(`
+    <h3>My account</h3>
+    <p class="muted small">Signed in as <strong>${esc(state.user.name)}</strong> · ${esc(state.user.email)}. You can sign out, change your password, or reset it with a code sent to your e-mail. The other security settings are for the owner.</p>
+    <div class="adm-btns"><button class="btn ghost" id="sLogout">Sign out of this device</button><button class="btn ghost danger-text" id="sOthers">Sign out my other devices</button></div>
+    <h3>Change my password</h3>
+    <form id="adminPw" class="set-pw" novalidate>
+      <div class="set-grid">
+        <label>Current password<input type="password" name="current" autocomplete="current-password"></label>
+        <label>New password (8+ characters, letters and numbers)<input type="password" name="new" autocomplete="new-password"></label>
+      </div>
+      <button class="btn ghost" type="submit">Change my password</button><p class="note" id="pwNote"></p>
+    </form>
+    ${otpBlockHTML()}`);
+  $('#sLogout').addEventListener('click', logout);
+  $('#sOthers').addEventListener('click', async () => {
+    if (!confirm('Sign out every other device where you are signed in?')) return;
+    try { const r = await api('/admin/sessions/revoke-others', { method: 'POST', body: {} }); toast(`${r.revoked} other device(s) signed out`); }
+    catch (err) { toast(err.message); }
+  });
+  $('#adminPw').addEventListener('submit', async e => {
+    e.preventDefault(); const note = $('#pwNote'); note.className = 'note';
+    try { await api('/me/password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); e.target.reset(); note.textContent = 'Password updated. Your other devices were signed out.'; }
+    catch (err) { note.textContent = err.message; note.classList.add('err'); }
+  });
+  bindOtp();
+}
 async function renderSecurity() {
   const owner = isOwner();
+  if (!owner) return staffSecurity();
   const [ss, ad, lg] = await Promise.all([api('/admin/sessions'), owner ? api('/admin/admins') : null, owner ? api('/admin/log') : null]);
   const sessions = ss.sessions;
   panel(`
@@ -890,6 +1107,7 @@ async function renderSecurity() {
     </form>
 
     ${owner ? `
+    ${otpBlockHTML()}
     <h3>Access &amp; activity log</h3>
     <p class="muted small">Every sign-in, failed sign-in and important change made by the admins and the system (last 300).</p>
     <div class="adm-filter"><input id="logSearch" type="search" placeholder="Search (name, action, IP, order no.…)">
@@ -931,6 +1149,7 @@ async function renderSecurity() {
     try { await api('/me/password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); e.target.reset(); note.textContent = 'Password updated. Your other devices were signed out.'; }
     catch (err) { note.textContent = err.message; note.classList.add('err'); }
   });
+  bindOtp();
   if (!owner) return;
 
   $('#addAdmin').addEventListener('submit', async e => {

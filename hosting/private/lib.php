@@ -109,15 +109,22 @@ function schema_statements($driver)
             del_state VARCHAR(12), del_by VARCHAR(120), del_reason VARCHAR(300), del_at BIGINT, del_decided_by VARCHAR(120), del_decided_at BIGINT"
             . $k('o_user (user_id)') . $k('o_status (status)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS order_events(id $pk, order_id VARCHAR(20), status VARCHAR(40), note VARCHAR(400), created BIGINT" . $k('e_order (order_id)') . ")$tail",
-        "CREATE TABLE IF NOT EXISTS notifications(id $pk, kind VARCHAR(20), title VARCHAR(300), body TEXT, ref VARCHAR(100), created BIGINT, `read` INT DEFAULT 0)$tail",
+        "CREATE TABLE IF NOT EXISTS notifications(id $pk, kind VARCHAR(20), title VARCHAR(300), body TEXT, ref VARCHAR(100), created BIGINT, `read` INT DEFAULT 0,
+            to_user INT, owners_only INT DEFAULT 0)$tail",
         "CREATE TABLE IF NOT EXISTS enquiries(id $pk, name VARCHAR(120), company VARCHAR(160), email VARCHAR(190), phone VARCHAR(50), type VARCHAR(100),
-            qty VARCHAR(100), message TEXT, created BIGINT, status VARCHAR(20) DEFAULT 'New')$tail",
+            qty VARCHAR(100), message TEXT, created BIGINT, status VARCHAR(20) DEFAULT 'New', images TEXT)$tail",
+        "CREATE TABLE IF NOT EXISTS enquiry_msgs(id $pk, enquiry_id INT, sender VARCHAR(12), channel VARCHAR(12), body TEXT, by_name VARCHAR(120),
+            created BIGINT" . $k('em_enq (enquiry_id)') . ")$tail",
+        "CREATE TABLE IF NOT EXISTS approvals(id $pk, kind VARCHAR(20), ref VARCHAR(40), title VARCHAR(300), detail TEXT, status VARCHAR(12),
+            req_user INT, req_name VARCHAR(120), decided_by VARCHAR(120), created BIGINT, decided_at BIGINT" . $k('ap_ref (ref)') . ")$tail",
+        "CREATE TABLE IF NOT EXISTS password_otps(id $pk, user_id INT, code_hash VARCHAR(255), expires BIGINT, attempts INT DEFAULT 0,
+            used INT DEFAULT 0, created BIGINT" . $k('po_user (user_id)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS messages(id $pk, user_id INT, sender VARCHAR(20), body TEXT, created BIGINT, seen INT DEFAULT 0, auto INT DEFAULT 0" . $k('m_user (user_id)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS settings(`key` VARCHAR(100) PRIMARY KEY, value MEDIUMTEXT)$tail",
     ];
 }
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 function exec_schema()
 {
@@ -153,7 +160,8 @@ function migrate()
         ['orders', 'del_state', 'VARCHAR(12)'], ['orders', 'del_by', 'VARCHAR(120)'], ['orders', 'del_reason', 'VARCHAR(300)'], ['orders', 'del_at', 'BIGINT'],
         ['orders', 'del_decided_by', 'VARCHAR(120)'], ['orders', 'del_decided_at', 'BIGINT'], ['messages', 'auto', 'INT DEFAULT 0'],
         ['products', 'images', 'TEXT'], ['products', 'size', "VARCHAR(80) DEFAULT ''"], ['products', 'includes', "VARCHAR(200) DEFAULT ''"],
-        ['products', 'req_json', 'TEXT'], ['products', 'req_by', 'VARCHAR(120)'], ['products', 'req_at', 'BIGINT']];
+        ['products', 'req_json', 'TEXT'], ['products', 'req_by', 'VARCHAR(120)'], ['products', 'req_at', 'BIGINT'],
+        ['enquiries', 'images', 'TEXT'], ['notifications', 'to_user', 'INT'], ['notifications', 'owners_only', 'INT DEFAULT 0']];
     foreach ($add as $a) {
         if (!column_exists($a[0], $a[1])) {
             try { db()->exec("ALTER TABLE {$a[0]} ADD COLUMN {$a[1]} {$a[2]}"); } catch (Throwable $e) { /* another request did it first */ }
@@ -217,6 +225,8 @@ function default_settings()
         'shop' => ['autoDeleteSoldOut' => false],
         // an order is only CONFIRMED after the payment is verified; unpaid orders are released after unpaidHours (0 = never)
         'orders' => ['requireReceipt' => true, 'unpaidHours' => 24],
+        // Text of the WhatsApp / SMS reply to an enquiry. {name} = customer's first name, {topic} = what they asked about. Owner can change it.
+        'enquiry' => ['template' => "Welcome to Lofan for your home accessories! 🏡✨\nThank you {name}, we have received your enquiry {topic} and we have started the process. We will make it as beautiful as you imagine.\nOur team will contact you shortly with the details. 🌿\n– Lofan Development & Trading"],
         // Automatic replies in the website chat. EDIT THE DEFAULT TEXTS HERE (they can also be changed in Admin > Company & Payments).
         'chat' => [
             'autoReply' => true,
@@ -236,6 +246,8 @@ function default_settings()
                 'iban' => '', 'swift' => '', 'branch' => 'Doha, Qatar'],
             'fawran' => ['enabled' => true, 'alias' => '66404222', 'accountName' => 'Lofan Development & Trading', 'bankName' => ''],
             'ooredoo' => ['enabled' => true, 'number' => '66404222', 'accountName' => 'Lofan Development & Trading'],
+            // Card payments run on the payment provider's own secure page (MyFatoorah). Card numbers never touch this website.
+            'card' => ['enabled' => false, 'apiToken' => '', 'test' => true],
         ],
     ];
 }
@@ -465,9 +477,11 @@ function new_order_id()
     } while (q_val('SELECT 1 FROM orders WHERE id=?', [$id]));
     return $id;
 }
-function notify($kind, $title, $body, $ref = '')
+/* $to = user id: only that admin sees it. $ownersOnly = only owner accounts see it. Neither = every admin sees it. */
+function notify($kind, $title, $body, $ref = '', $to = null, $ownersOnly = false)
 {
-    q_exec('INSERT INTO notifications(kind,title,body,ref,created) VALUES(?,?,?,?,?)', [$kind, $title, $body, $ref, now()]);
+    q_exec('INSERT INTO notifications(kind,title,body,ref,created,to_user,owners_only) VALUES(?,?,?,?,?,?,?)',
+        [$kind, $title, $body, $ref, now(), $to === null ? null : (int)$to, $ownersOnly ? 1 : 0]);
 }
 function add_event($oid, $status, $note = '')
 {
@@ -526,7 +540,7 @@ function applepay_missing($ap, $hasIdentity = null)
 function settings_for_admin($owner = true)
 {
     $raw = get_settings();
-    if (!$owner) return ['company' => $raw['company'], 'shop' => $raw['shop'], 'shipping' => $raw['shipping']];   // staff never see payment / secret settings
+    if (!$owner) return ['shop' => $raw['shop'], 'shipping' => $raw['shipping']];   // company, payment and alert settings are for the owner only
     $out = $raw;
     unset($out['alerts']['sms']);
     $out['alerts']['whatsapp']['hasKey'] = !empty($raw['alerts']['whatsapp']['apiKey']);
@@ -534,6 +548,8 @@ function settings_for_admin($owner = true)
     $out['alerts']['whatsapp']['target'] = whatsapp_target($raw);                  // who really receives the alerts (shown in Admin)
     $out['alerts']['telegram']['hasToken'] = !empty($raw['alerts']['telegram']['botToken']);
     $out['alerts']['telegram']['botToken'] = '';
+    $out['payments']['card']['hasToken'] = str_val($raw['payments']['card']['apiToken'] ?? '') !== '';
+    $out['payments']['card']['apiToken'] = '';                       // the provider token is never sent back to the browser
     $out['applepay']['hasSecret'] = !empty($raw['applepay']['secretKey']);
     $out['applepay']['secretKey'] = '';                             // never send secrets back to the browser
     $out['applepay']['hasIdentity'] = is_file(identity_pem());
@@ -570,6 +586,11 @@ function payment_info()
         $methods[] = ['id' => 'applepay', 'label' => 'Apple Pay', 'wallet' => true,
             'hint' => 'Pay securely with Face ID / Touch ID using a card in your Apple Wallet. Your order is confirmed instantly.',
             'details' => [], 'applepay' => ['displayName' => $ap['displayName'] ?: 'Lofan', 'countryCode' => 'QA', 'currencyCode' => CURRENCY]];
+    }
+    if (!empty($p['card']['enabled']) && str_val($p['card']['apiToken']) !== '') {
+        $methods[] = ['id' => 'card', 'label' => 'Bank card (secure online)', 'card' => true,
+            'hint' => 'You will be taken to the secure payment page of our payment provider to enter your card. Your card details are never entered on this website. Your order is confirmed as soon as the payment is approved.',
+            'details' => []];
     }
     return ['company' => $s['company'], 'currency' => CURRENCY, 'methods' => $methods, 'requireReceipt' => !empty($s['orders']['requireReceipt'])];
 }

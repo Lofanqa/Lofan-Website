@@ -300,6 +300,123 @@ function describe_product_changes($row, $c)
     return $out;
 }
 
+/* ------------------------------------------------------------------ e-mail (password codes) */
+/* Sends a plain-text e-mail with PHP's mail() (your cPanel mail service). Set mail_capture in the test config to log instead. */
+function send_mail($to, $subject, $text)
+{
+    if (!valid_email($to)) return false;
+    $cap = cfg()['mail_capture'] ?? null;
+    if ($cap) { @file_put_contents($cap, json_encode(['to' => $to, 'subject' => $subject, 'body' => $text], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND); return true; }
+    $co = get_settings()['company'];
+    $host = explode(':', (string)($_SERVER['HTTP_HOST'] ?? 'lofan.qa'))[0];
+    $from = (!empty($co['email']) && valid_email($co['email'])) ? $co['email'] : 'no-reply@' . $host;
+    $headers = "From: Lofan <$from>\r\nReply-To: $from\r\nContent-Type: text/plain; charset=UTF-8\r\nX-Mailer: Lofan";
+    $ok = @mail($to, '=?UTF-8?B?' . base64_encode($subject) . '?=', $text, $headers);
+    if (!$ok) error_log('Lofan: the e-mail to ' . $to . ' could not be handed to the mail service.');
+    return (bool)$ok;
+}
+
+/* ------------------------------------------------------------------ password reset by e-mail code (admins and staff) */
+const OTP_MINUTES = 10;
+/* Creates a 6-digit code, stores only its hash, and e-mails it to the admin's login address. Returns true when sent. */
+function otp_issue($u)
+{
+    if ((int)q_val('SELECT COUNT(*) FROM password_otps WHERE user_id=? AND created>?', [(int)$u['id'], now() - 900]) >= 3) return false;   // at most 3 codes per 15 minutes
+    $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+    q_exec('UPDATE password_otps SET used=1 WHERE user_id=? AND used=0', [(int)$u['id']]);
+    q_exec('INSERT INTO password_otps(user_id,code_hash,expires,attempts,used,created) VALUES(?,?,?,?,?,?)',
+        [(int)$u['id'], password_hash($code, PASSWORD_DEFAULT), now() + OTP_MINUTES * 60, 0, 0, now()]);
+    return send_mail($u['email'], 'Lofan – your password reset code',
+        "Hello " . $u['name'] . ",\n\nYour code to reset your Lofan admin password is:\n\n    " . $code . "\n\nIt is valid for " . OTP_MINUTES . " minutes and can be used once.\nIf you did not ask for this, ignore this e-mail – your password stays the same.\n\nLofan Development & Trading");
+}
+/* Checks a code. Returns true only for the newest unused, unexpired code. A used code cannot be used again. */
+function otp_accept($u, $code)
+{
+    $row = q_one('SELECT * FROM password_otps WHERE user_id=? AND used=0 ORDER BY id DESC LIMIT 1', [(int)$u['id']]);
+    if (!$row || (int)$row['expires'] < now()) return false;
+    if (!password_verify(str_val($code), $row['code_hash'])) return false;
+    q_exec('UPDATE password_otps SET used=1 WHERE user_id=?', [(int)$u['id']]);
+    return true;
+}
+
+/* ------------------------------------------------------------------ approvals (what staff asked, what the owner decided) */
+function approval_add($kind, $ref, $title, $detail, $me)
+{
+    return q_insert('INSERT INTO approvals(kind,ref,title,detail,status,req_user,req_name,created) VALUES(?,?,?,?,?,?,?,?)',
+        [$kind, (string)$ref, slice((string)$title, 290), slice((string)$detail, 1000), 'pending', (int)$me['id'], (string)$me['name'], now()]);
+}
+function approval_decide($ref, $kinds, $status, $decidedBy)
+{
+    $in = implode(',', array_fill(0, count($kinds), '?'));
+    q_exec("UPDATE approvals SET status=?,decided_by=?,decided_at=? WHERE ref=? AND status='pending' AND kind IN ($in)",
+        array_merge([$status, (string)$decidedBy, now(), (string)$ref], $kinds));
+}
+/* Owners see every request. Staff see their own open requests, and every decided one (with the name of who asked). */
+function approval_list($me)
+{
+    $sql = 'SELECT * FROM approvals WHERE 1=1'; $p = [];
+    if (!is_owner($me)) { $sql .= " AND (status<>'pending' OR req_user=?)"; $p[] = (int)$me['id']; }
+    return q_all($sql . ' ORDER BY id DESC LIMIT 200', $p);
+}
+
+/* ------------------------------------------------------------------ enquiries: reference photos and reply thread */
+const ENQ_MAX_IMAGES = 5;
+function enquiry_image_dir() { return priv_dir() . '/enquiry-images'; }
+function save_enquiry_images($list, $eid)
+{
+    $names = [];
+    foreach (array_slice((array)$list, 0, ENQ_MAX_IMAGES) as $i => $img) {
+        $data = is_array($img) ? ($img['data'] ?? '') : $img;
+        if (!is_string($data) || $data === '') continue;
+        $names[] = save_data_url($data, enquiry_image_dir(), 'e' . (int)$eid . '-' . ($i + 1) . '-' . bin2hex(random_bytes(3)),
+            ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'], 4000000);
+    }
+    return $names;
+}
+function delete_enquiry_files($eid)
+{
+    $row = q_one('SELECT images FROM enquiries WHERE id=?', [(int)$eid]);
+    foreach ((array)json_decode((string)($row['images'] ?? ''), true) as $f) if (is_string($f)) @unlink(enquiry_image_dir() . '/' . basename($f));
+    q_exec('DELETE FROM enquiry_msgs WHERE enquiry_id=?', [(int)$eid]);
+}
+/* The reply text: the owner's template with the customer's first name and topic filled in. */
+function enquiry_reply_text($enq)
+{
+    $t = (string)(get_settings()['enquiry']['template'] ?? '');
+    $first = trim(explode(' ', trim((string)$enq['name']))[0] ?? '');
+    $topic = trim((string)($enq['type'] ?? '')) !== '' ? 'about ' . strtolower(trim($enq['type'])) : '';
+    $txt = strtr($t, ['{name}' => $first !== '' ? $first : 'there', '{topic}' => $topic]);
+    $txt = preg_replace('/[ \t]{2,}/', ' ', $txt);                 // an empty {topic} must not leave a double space
+    $txt = preg_replace('/ +([,.!?])/', '$1', $txt);
+    return slice(trim($txt), 900);
+}
+
+/* ------------------------------------------------------------------ card payments: MyFatoorah hosted payment page */
+/* Base web address of the live server, used for the "come back after paying" links. */
+function site_base_url()
+{
+    return (is_https() ? 'https' : 'http') . '://' . (string)($_SERVER['HTTP_HOST'] ?? 'lofan.qa');
+}
+function mf_base($test)
+{
+    $c = cfg();
+    if (!empty($c['myfatoorah_base'])) return rtrim((string)$c['myfatoorah_base'], '/');     // test server only
+    return $test ? 'https://apitest.myfatoorah.com' : 'https://api.myfatoorah.com';
+}
+/* One call to the provider. Returns the Data object, or throws a friendly error (details go to the server log). */
+function mf_call($path, $token, $payload)
+{
+    $cfg = get_settings()['payments']['card'];
+    list($body, $code, $err) = http_json(mf_base(!empty($cfg['test'])) . $path, $payload, ['Authorization: Bearer ' . $token], [], 25);
+    if (is_string($body)) $body = preg_replace('/^\xEF\xBB\xBF/', '', $body);   // some servers start the answer with an invisible byte-order mark
+    $j = is_string($body) ? json_decode($body, true) : null;
+    if (!is_array($j) || empty($j['IsSuccess'])) {
+        error_log('MyFatoorah ' . $path . ' failed (HTTP ' . $code . ' ' . $err . '): ' . slice((string)$body, 400));
+        throw new ApiError(502, 'The card payment page could not be opened. Please choose another payment method or try again.');
+    }
+    return is_array($j['Data'] ?? null) ? $j['Data'] : [];
+}
+
 /* ------------------------------------------------------------------ automatic chat replies */
 function customer_order_text($o)
 {
@@ -340,6 +457,7 @@ function reset_data($o)
         }
         q_exec('DELETE FROM order_events');
         q_exec('DELETE FROM orders');
+        q_exec("DELETE FROM approvals WHERE kind='order_delete'");
     }
     if (!empty($o['customers'])) {
         $ids = array_map(function ($r) { return (int)$r['id']; }, q_all("SELECT id FROM users WHERE role='customer'"));
@@ -352,7 +470,10 @@ function reset_data($o)
         $n['customers'] = count($ids);
     }
     if (!empty($o['chats'])) { $n['chats'] = (int)q_val('SELECT COUNT(*) FROM messages'); q_exec('DELETE FROM messages'); }
-    if (!empty($o['enquiries'])) { $n['enquiries'] = q_exec('DELETE FROM enquiries'); }
+    if (!empty($o['enquiries'])) {
+        foreach (q_all('SELECT id FROM enquiries') as $e) delete_enquiry_files((int)$e['id']);   // photos and reply thread too
+        $n['enquiries'] = q_exec('DELETE FROM enquiries');
+    }
     if (!empty($o['notifications'])) { $n['notifications'] = q_exec('DELETE FROM notifications'); }
     if (!empty($o['log'])) { $n['log'] = q_exec('DELETE FROM admin_log'); }
     sweep_soldout();
