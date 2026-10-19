@@ -1,7 +1,7 @@
 /* =====================================================================
    LOFAN – payment page
    Step 1  delivery details  ->  order is created (stock reserved)
-   Step 2  choose IBAN / Fawran / Ooredoo Money, pay, enter reference
+   Step 2  choose Apple Pay or SkipCash and pay on the secure page
    Step 3  confirmation (admin is notified instantly)
    ===================================================================== */
 $('#year').textContent = new Date().getFullYear();
@@ -81,7 +81,6 @@ async function stepDelivery() {
 }
 
 /* ---------- Step 2: pay ---------- */
-const copyBtn = v => `<button type="button" class="copy" data-copy="${esc(v)}">Copy</button>`;
 async function stepPay() {
   setStep(2);
   if (!info) info = await api('/payment-info');
@@ -93,98 +92,47 @@ async function stepPay() {
   <div class="pay-head">
     <div><span class="muted small">Order</span><strong>${order.id}</strong></div>
     <div><span class="muted small">Amount to pay</span><strong class="amt">${money(order.total)}</strong></div>
-    <div><span class="muted small">Pay to</span><strong>${esc(info.company.name)}</strong>${info.company.crNumber ? `<small class="muted"> CR ${esc(info.company.crNumber)}</small>` : ''}</div>
+    <div><span class="muted small">Pay to</span><strong>${esc(info.company.name)}</strong></div>
   </div>
-  <p class="gate-note">Your items are reserved for you. <strong>Your order is confirmed only after your payment is verified.</strong></p>
-  ${new URLSearchParams(location.search).get('failed') === '1' ? '<p class="gate-note err-note">The card payment was not completed, so nothing was charged. Your items are still reserved for you – you can try again or choose another method.</p>' : ''}
-  <form id="payForm" class="co-grid" novalidate>
-    <div class="co-col">
-      <h3>1. Choose how to pay</h3>
-      <div class="pay-opts">${info.methods.map((m, i) => `<label class="pay-opt"><input type="radio" name="method" value="${m.id}" ${i ? '' : 'checked'}><span>${esc(m.label)}</span></label>`).join('')}</div>
-      ${info.methods.map((m, i) => m.wallet ? `
-        <div class="pay-panel" data-pay="${m.id}" ${i ? 'hidden' : ''}>
-          <p class="muted small">${esc(m.hint)}</p>
-          <div class="wallet-box">
-            ${applePayOK()
-              ? `<button type="button" class="apple-pay-btn" id="apBtn" aria-label="Pay with Apple Pay"></button>
-                 <p class="muted small center">Total <strong>${money(order.total)}</strong> · you will confirm with Face ID / Touch ID.</p>`
-              : `<p class="wallet-note">Apple Pay works on <strong>Safari</strong> on iPhone, iPad or Mac with a card in Apple Wallet. Please open this page there, or choose another payment method.</p>`}
-            <p class="note" id="apNote"></p>
-          </div>
-        </div>` : m.card ? `
-        <div class="pay-panel" data-pay="${m.id}" ${i ? 'hidden' : ''}>
-          <p class="muted small">${esc(m.hint)}</p>
-          <div class="wallet-box">
-            <button type="button" class="btn full" id="cardBtn">Pay securely by card <b>&rarr;</b></button>
-            <p class="muted small center">Total <strong>${money(order.total)}</strong> · you will be taken to the payment provider's secure page.</p>
-            <p class="note" id="cardNote"></p>
-          </div>
-        </div>` : `
-        <div class="pay-panel" data-pay="${m.id}" ${i ? 'hidden' : ''}>
-          <p class="muted small">${esc(m.hint)}</p>
-          <div class="bank">
-            ${m.details.map(([k, v]) => `<div class="bank-row"><span>${esc(k)}</span><strong>${esc(v)}</strong>${copyBtn(v)}</div>`).join('')}
-            <div class="bank-row"><span>Amount</span><strong>${money(order.total)}</strong>${copyBtn(order.total)}</div>
-            <div class="bank-row ref"><span>Payment reference</span><strong>${order.id}</strong>${copyBtn(order.id)}</div>
-          </div>
-        </div>`).join('')}
-    </div>
-    <div class="co-col" id="manualPay" ${info.methods[0].wallet || info.methods[0].card ? 'hidden' : ''}>
-      <h3>2. Confirm your payment</h3>
-      <p class="muted small">After sending the money, enter the transaction number shown on your bank / Ooredoo Money receipt so we can verify it quickly.</p>
-      <label>Transaction / reference number<input name="txn" placeholder="e.g. FT26279XXXXX" required></label>
-      <label>Upload your payment receipt ${info.requireReceipt ? '<b class="req">(required)</b>' : '(optional)'} – a screenshot or PDF from your bank / wallet app, max 1.4 MB<input type="file" name="receipt" accept="image/*,.pdf"></label>
-      <button class="btn full" type="submit">I have paid – Submit <b>&rarr;</b></button>
-      <p class="note" id="payNote"></p>
-      <p class="muted small center"><button type="button" class="ulink" id="cancelOrder">Cancel this order</button></p>
-    </div>
-  </form>`;
-  $('#payForm').addEventListener('change', e => {
-    if (e.target.name !== 'method') return;
-    $$('.pay-panel').forEach(p => { p.hidden = p.dataset.pay !== e.target.value; });
-    const pick = info.methods.find(m => m.id === e.target.value) || {};
-    $('#manualPay').hidden = !!(pick.wallet || pick.card);   // wallets and cards pay on the spot – no receipt needed
-  });
+  <p class="gate-note">Your items are reserved for you. Choose how you would like to pay.</p>
+  ${new URLSearchParams(location.search).get('failed') === '1' ? '<p class="gate-note err-note">The payment was not completed, so nothing was charged. Your items are still reserved for you – you can try again.</p>' : ''}
+  <div class="pay-choice">
+    ${info.methods.map(m => m.wallet ? `
+      <div class="pay-card">
+        <h3>${esc(m.label)}</h3>
+        <p class="muted small">${esc(m.hint)}</p>
+        ${applePayOK()
+          ? `<button type="button" class="apple-pay-btn" id="apBtn" aria-label="Pay with Apple Pay"></button>
+             <p class="muted small center">Total <strong>${money(order.total)}</strong> · you will confirm with Face ID / Touch ID.</p>`
+          : `<p class="wallet-note">Apple Pay works on <strong>Safari</strong> on iPhone, iPad or Mac with a card in Apple Wallet. Please open this page there, or pay with SkipCash.</p>`}
+        <p class="note" id="apNote"></p>
+      </div>` : `
+      <div class="pay-card">
+        <h3>${esc(m.label)}</h3>
+        <p class="muted small">${esc(m.hint)}</p>
+        <button type="button" class="btn full" id="scBtn">Pay ${money(order.total)} with SkipCash <b>&rarr;</b></button>
+        <p class="note" id="scNote"></p>
+      </div>`).join('')}
+  </div>
+  <p class="muted small center"><button type="button" class="ulink" id="cancelOrder">Cancel this order</button></p>`;
   const ap = $('#apBtn'); if (ap) ap.addEventListener('click', startApplePay);
-  const cb = $('#cardBtn'); if (cb) cb.addEventListener('click', startCard);
-  view.addEventListener('click', e => {
-    const c = e.target.closest('.copy');
-    if (c) navigator.clipboard?.writeText(c.dataset.copy).then(() => toast('Copied'), () => toast('Copy failed'));
-  });
+  const sc = $('#scBtn'); if (sc) sc.addEventListener('click', startSkipCash);
   $('#cancelOrder').addEventListener('click', async () => {
     if (!confirm('Cancel this order?')) return;
     try { await api(`/orders/${order.id}/cancel`, { method: 'POST' }); toast('Order cancelled'); location.href = 'account.html#orders'; } catch (err) { toast(err.message); }
   });
-  $('#payForm').addEventListener('submit', async e => {
-    e.preventDefault();
-    const f = e.target, v = Object.fromEntries(new FormData(f)), note = $('#payNote'), btn = $('button[type=submit]', f);
-    note.className = 'note';
-    if (v.txn.trim().length < 4) return fail(note, 'Please enter the transaction / reference number.');
-    let receipt = null; const file = f.elements.receipt.files[0];
-    if (!file && info.requireReceipt) return fail(note, 'Please upload your payment receipt (a screenshot from your bank or wallet app). It is required to confirm your order.');
-    if (file) {
-      if (file.size > 1_400_000) return fail(note, 'Receipt is too large (max 1.4 MB).');
-      receipt = { name: file.name, data: await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); }) };
-    }
-    btn.disabled = true;
-    try {
-      const r = await api(`/orders/${order.id}/payment`, { method: 'POST', body: { method: v.method, txn: v.txn.trim(), receipt } });
-      order = r.order; stepDone();
-    } catch (err) { fail(note, err.message); btn.disabled = false; }
-  });
 }
-
-/* ---------- Card payment: the server opens the provider's secure page; the card is entered only there ---------- */
-async function startCard() {
-  const note = $('#cardNote'), b = $('#cardBtn');
+/* ---------- SkipCash: the server opens SkipCash's secure payment page; the customer pays there ---------- */
+async function startSkipCash() {
+  const note = $('#scNote'), b = $('#scBtn');
   note.className = 'note'; note.textContent = '';
   b.disabled = true; b.textContent = 'Opening the secure payment page…';
   try {
-    const r = await api(`/orders/${order.id}/card/start`, { method: 'POST' });
-    location.href = r.url;                                     // leaves this website for the provider's page
+    const r = await api(`/orders/${order.id}/skipcash/start`, { method: 'POST' });
+    location.href = r.url;                                     // leaves this website for SkipCash's page
   } catch (err) {
     note.className = 'note err'; note.textContent = err.message;
-    b.disabled = false; b.innerHTML = 'Pay securely by card <b>&rarr;</b>';
+    b.disabled = false; b.innerHTML = `Pay ${money(order.total)} with SkipCash <b>&rarr;</b>`;
   }
 }
 

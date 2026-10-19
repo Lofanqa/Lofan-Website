@@ -98,7 +98,7 @@ function addToCart(id, qty = 1) {
   if (!p || p.stock <= 0) { toast('Sorry, this item is sold out.'); return false; }
   if (have + qty > p.stock) { toast(`Only ${p.stock} available${have ? ` (you already have ${have} in your cart)` : ''}.`); return false; }
   row ? row.qty += qty : cart.push({ id, qty });
-  Cart.set(cart); renderCart(); openMini(id);
+  Cart.set(cart); renderCart(); toast('Added to your cart ✓');
   return true;
 }
 
@@ -133,60 +133,37 @@ function showProduct(id) {
   }
 }
 
-/* ---------- Mini cart: slides in on the right whenever something is added ---------- */
-let miniTimer, miniJust = null;
-function ensureMini() {
-  if ($('#miniCart')) return;
+/* ---------- Cart bar (bottom of the screen) and cart panel (slides in from the right) ---------- */
+function ensureCartUI() {
+  if ($('#cartBar')) return;
   document.body.insertAdjacentHTML('beforeend', `
-    <aside class="mini" id="miniCart" aria-label="Your cart" hidden>
-      <header><strong id="miniTitle">Added to your cart</strong><button id="miniClose" aria-label="Close">&times;</button></header>
-      <div class="mini-body" id="miniBody"></div>
-      <footer id="miniFoot"></footer>
+    <div class="cart-bar" id="cartBar" hidden>
+      <div class="cb-info"><strong id="cbCount">0 items</strong><span id="cbTotal"></span></div>
+      <div class="cb-btns"><button class="btn ghost" id="cbView">View cart</button><button class="btn" id="cbCheckout">Check out</button></div>
+    </div>
+    <div class="overlay" id="cdOverlay"></div>
+    <aside class="drawer cart-drawer" id="cartDrawer" aria-label="Your cart">
+      <div class="drawer-head"><h3>Your cart</h3><button id="cdClose" aria-label="Close">&times;</button></div>
+      <div class="drawer-body" id="cdList"></div>
+      <div class="drawer-foot" id="cdSummary"></div>
     </aside>`);
-  const el = $('#miniCart');
-  $('#miniClose').addEventListener('click', closeMini);
-  el.addEventListener('mouseenter', () => clearTimeout(miniTimer));
-  el.addEventListener('mouseleave', () => { clearTimeout(miniTimer); miniTimer = setTimeout(closeMini, 6000); });
-  el.addEventListener('click', e => {
-    const b = e.target.closest('button[data-a]');
-    if (b) {
-      const id = +b.dataset.id, cart = Cart.get(), row = cart.find(i => i.id === id); if (!row) return;
-      if (b.dataset.a === 'inc') { if (row.qty >= stockOf(product(id))) return toast('Only ' + row.qty + ' available'); row.qty++; }
-      if (b.dataset.a === 'dec') row.qty--;
-      miniJust = null; clearTimeout(miniTimer);
-      Cart.set(b.dataset.a === 'rm' || row.qty < 1 ? cart.filter(i => i.id !== id) : cart); renderCart(); return;
-    }
-    if (e.target.closest('#miniView')) { closeMini(); goTo('#cart'); }
-    if (e.target.closest('#miniCheckout')) { closeMini(); startCheckout(); }
-  });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMini(); });
+  $('#cbView').addEventListener('click', openCartPanel);
+  $('#cbCheckout').addEventListener('click', startCheckout);
+  $('#cdClose').addEventListener('click', closeCartPanel);
+  $('#cdOverlay').addEventListener('click', closeCartPanel);
+  $('#cdList').addEventListener('click', onCartQty);
+  $('#cartDrawer').addEventListener('click', e => { if (e.target.closest('[data-checkout]')) { closeCartPanel(); startCheckout(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCartPanel(); });
 }
-function openMini(justId) {
-  ensureMini(); miniJust = justId ?? null; renderMini();
-  const el = $('#miniCart'); el.hidden = false; void el.offsetWidth; el.classList.add('open');   // reflow first so the slide-in animates
-  clearTimeout(miniTimer); miniTimer = setTimeout(closeMini, 12000);
-}
-function closeMini() {
-  const el = $('#miniCart'); if (!el) return;
-  el.classList.remove('open'); setTimeout(() => { if (!el.classList.contains('open')) el.hidden = true; }, 300);
-}
-function renderMini() {
-  const body = $('#miniBody'); if (!body) return;
-  const cart = Cart.get().filter(i => product(i.id)), t = cart.length ? totals(cart) : null;
-  $('#miniTitle').textContent = miniJust ? 'Added to your cart ✓' : 'Your cart';
-  body.innerHTML = cart.length ? cart.map(i => {
-    const p = product(i.id);
-    return `<div class="mc-item ${i.id === miniJust ? 'just' : ''}">
-      <img src="${esc(p.img)}" alt="">
-      <div><strong>${esc(p.name)}</strong><small>${money(p.price)} each</small>
-        <div class="qty"><button data-a="dec" data-id="${p.id}" aria-label="Decrease">&minus;</button><span>${i.qty}</span><button data-a="inc" data-id="${p.id}" aria-label="Increase">+</button></div></div>
-      <div class="mc-right"><strong>${money(p.price * i.qty)}</strong><button class="rm" data-a="rm" data-id="${p.id}">Remove</button></div>
-    </div>`;
-  }).join('') : '<p class="muted center" style="padding:30px 0">Your cart is empty.</p>';
-  $('#miniFoot').innerHTML = cart.length ? `
-    <div class="sum-row"><span>Subtotal (${cart.reduce((s, i) => s + i.qty, 0)} items)</span><strong>${money(t.subtotal)}</strong></div>
-    <p class="ship">${t.shipping ? `Add ${money(SHIPPING.freeFrom - t.subtotal)} more for free shipping.` : 'You get free shipping!'}</p>
-    <div class="mc-btns"><button class="btn ghost" id="miniView">View cart</button><button class="btn" id="miniCheckout">Checkout</button></div>` : '';
+function openCartPanel() { ensureCartUI(); renderCart(); $('#cartDrawer').classList.add('open'); $('#cdOverlay').classList.add('open'); }
+function closeCartPanel() { if (!$('#cartDrawer')) return; $('#cartDrawer').classList.remove('open'); $('#cdOverlay').classList.remove('open'); }
+function onCartQty(e) {                                                // + / − / Remove buttons in the cart (panel or section)
+  const b = e.target.closest('button'); if (!b || !b.dataset.a) return;
+  const id = +b.dataset.id, cart = Cart.get(), row = cart.find(i => i.id === id); if (!row) return;
+  if (b.dataset.a === 'inc') { if (row.qty >= stockOf(product(id))) return toast('Only ' + row.qty + ' in stock'); row.qty++; }
+  if (b.dataset.a === 'dec') row.qty--;
+  Cart.set(b.dataset.a === 'rm' || row.qty < 1 ? cart.filter(i => i.id !== id) : cart);
+  renderCart();
 }
 /* ---------- Search: the bar stays under the header while you scroll; results show in the shop grid ---------- */
 const setHeaderVar = () => document.documentElement.style.setProperty('--hdr', $('.header').offsetHeight + 'px');
@@ -231,7 +208,7 @@ function totals(cart) {
 }
 function renderCart() {
   const cart = cleanCart(), t = totals(cart);
-  $('#cartList').innerHTML = cart.length ? cart.map(i => {
+  const list = cart.length ? cart.map(i => {
     const p = product(i.id);
     return `<div class="cl-item">
       <img src="${esc(p.img)}" alt="">
@@ -240,29 +217,32 @@ function renderCart() {
       <div class="cl-right"><strong>${money(p.price * i.qty)}</strong><button class="rm" data-a="rm" data-id="${p.id}">Remove</button></div>
     </div>`;
   }).join('') : '<div class="cl-empty"><p>Your cart is empty.</p></div>';
-  $('#cartSummary').innerHTML = cart.length ? `
+  const summary = cart.length ? `
     <h3>Order summary</h3>
     <div class="sum-row"><span>Subtotal</span><span>${money(t.subtotal)}</span></div>
     <div class="sum-row"><span>Shipping</span><span>${t.shipping ? money(t.shipping) : 'Free'}</span></div>
     ${t.shipping ? `<p class="ship">Add ${money(SHIPPING.freeFrom - t.subtotal)} more for free shipping.</p>` : ''}
     <div class="sum-row total"><span>Total</span><strong>${money(t.total)}</strong></div>
-    <button class="btn full" id="checkoutBtn">Checkout <b>&rarr;</b></button>
+    <button class="btn full" data-checkout>Checkout <b>&rarr;</b></button>
     <p class="ship">An account is required to place an order.</p>` : '';
+  $('#cartList').innerHTML = list;
+  $('#cartSummary').innerHTML = summary;
   $('#cartSummary').style.display = cart.length ? '' : 'none';
-  if ($('#miniCart') && !$('#miniCart').hidden) renderMini();   // keep the pop-up in sync
+  ensureCartUI();
+  $('#cdList').innerHTML = list;
+  $('#cdSummary').innerHTML = summary;
+  $('#cdSummary').style.display = cart.length ? '' : 'none';
+  $('#cartBar').hidden = !cart.length;
+  document.body.classList.toggle('has-cart-bar', cart.length > 0);
+  const n = cart.reduce((s, i) => s + i.qty, 0);
+  $('#cbCount').textContent = `${n} item${n === 1 ? '' : 's'}`;
+  $('#cbTotal').textContent = cart.length ? money(t.total) : '';
 }
-$('#cartList').addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
-  const id = +b.dataset.id, cart = Cart.get(), row = cart.find(i => i.id === id); if (!row) return;
-  if (b.dataset.a === 'inc') { if (row.qty >= stockOf(product(id))) return toast('Only ' + row.qty + ' in stock'); row.qty++; }
-  if (b.dataset.a === 'dec') row.qty--;
-  Cart.set(b.dataset.a === 'rm' || row.qty < 1 ? cart.filter(i => i.id !== id) : cart);
-  renderCart();
-});
-$('#cartBtn').addEventListener('click', () => goTo('#cart'));
+$('#cartList').addEventListener('click', onCartQty);
+$('#cartBtn').addEventListener('click', openCartPanel);
 
 /* ---------- Checkout pop-up: account is mandatory before payment ---------- */
-$('#cartSummary').addEventListener('click', e => { if (e.target.closest('#checkoutBtn')) startCheckout(); });
+$('#cartSummary').addEventListener('click', e => { if (e.target.closest('[data-checkout]')) startCheckout(); });
 function startCheckout() {
   if (!Cart.get().length) return toast('Your cart is empty');
   if (!state.user) {

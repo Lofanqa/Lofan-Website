@@ -1,17 +1,11 @@
 /* =====================================================================
    LOFAN – admin dashboard
    Orders, notifications (pop-up + sound), products & stock, enquiries,
-   customers, company details & payment accounts (Qatar IBAN / Fawran / Ooredoo Money)
+   customers, company details & online payments (SkipCash / Apple Pay)
    ===================================================================== */
 let tab = 'overview', lastNotif = 0, orderFilter = '';
 const STATUS_ORDER = ['Awaiting payment', 'Payment submitted', 'Payment confirmed', 'Preparing', 'Out for delivery', 'Delivered', 'Cancelled'];
 const tagClass = s => s === 'Awaiting payment' || s === 'Payment submitted' ? 'wait' : s === 'Cancelled' ? 'bad' : 'ok';
-const ibanOk = s => {
-  s = String(s || '').replace(/\s/g, '').toUpperCase();
-  if (!/^QA\d{2}[A-Z]{4}[A-Z0-9]{21}$/.test(s)) return false;
-  const n = (s.slice(4) + s.slice(0, 4)).replace(/[A-Z]/g, c => c.charCodeAt(0) - 55);
-  let r = 0; for (const ch of n) r = (r * 10 + +ch) % 97; return r === 1;
-};
 
 /* After "Log out" the Back button must never show a cached dashboard: re-check the sign-in whenever the page is restored. */
 window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
@@ -66,15 +60,16 @@ function forgotStep1() {
   $('#forgotForm').addEventListener('submit', async e => {
     e.preventDefault(); const note = $('#gateNote'); note.className = 'note';
     const email = String(new FormData(e.target).get('email') || '').trim();
-    try { const r = await api('/auth/otp/request', { method: 'POST', body: { email } }); forgotStep2(email, r.message); }
+    try { const r = await api('/auth/otp/request', { method: 'POST', body: { email } }); forgotStep2(email, r.message, r.devCode); }
     catch (err) { note.textContent = err.message; note.classList.add('err'); }
   });
   $('#backLogin').addEventListener('click', e => { e.preventDefault(); gate(); });
 }
-function forgotStep2(email, message) {
+function forgotStep2(email, message, devCode) {
   $('#gateBody').innerHTML = `
     <h2>Enter the <em>code</em></h2>
     <p class="muted small">${esc(message)}</p>
+    ${devCode ? `<p class="note">Test mode – your code is <strong>${esc(devCode)}</strong></p>` : ''}
     <form id="codeForm" novalidate>
       <label>6-digit code<input name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></label>
       <label>New password (8+ characters, letters and numbers)<input name="password" type="password" autocomplete="new-password" required></label>
@@ -152,6 +147,7 @@ async function poll(first) {
     }
     const b = $('#badgeNotifs'); b.hidden = !d.unread; b.textContent = d.unread;
     const cb = $('#badgeChats'); cb.hidden = !d.chatUnread; cb.textContent = d.chatUnread;
+    const eb = $('#badgeEnq'); if (eb) { eb.hidden = !d.enqNew; eb.textContent = d.enqNew; }   // new enquiries until one is opened
     if (tab === 'chats' && !first) refreshChat();
     document.title = (d.unread ? `(${d.unread}) ` : '') + 'Lofan Admin';
     if (first || d.items.length) updateOrderBadge();
@@ -179,6 +175,21 @@ function approvalsHTML(list) {
       ${isOwner() && a.status === 'pending' ? `<button class="btn ghost" data-go="${a.kind === 'order_delete' ? 'orders' : 'products'}">Open to decide</button>` : ''}</div>`;
   }).join('');
 }
+/* Opening a notification is like opening a message: it is marked as read (its badge goes) and the screen it is about opens. */
+async function openNotif(el) {
+  const kind = el.dataset.kind, ref = el.dataset.ref || '';
+  try { await api(`/admin/notifications/${el.dataset.nid}/read`, { method: 'POST' }); } catch { /* still open the item */ }
+  poll();
+  if (kind === 'enquiry') { enqSel = +ref || enqSel; return showTab('enquiries'); }
+  if (kind === 'chat') { showTab('chats'); return openThread(+ref); }
+  if (kind === 'product') return showTab('products');
+  if (kind === 'order' || kind === 'payment') {
+    orderFilter = ''; showTab('orders');
+    setTimeout(() => { const c = $(`[data-order="${ref}"]`); if (c) { c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c.classList.add('flash'); } }, 500);
+    return;
+  }
+  renderNotifs();
+}
 async function renderNotifs() {
   const [d, ap] = await Promise.all([api('/admin/notifications?after=0'), api('/admin/approvals')]);
   const open = ap.approvals.filter(a => a.status === 'pending').length;
@@ -189,7 +200,8 @@ async function renderNotifs() {
     <div class="adm-save"><div><strong>${d.unread ? d.unread + ' unread' : 'All caught up'}</strong><p class="muted small">New orders, payment submissions and enquiries appear here and pop up instantly while this page is open. Remove the ones you don't need.</p></div>
     <div class="adm-btns"><button class="btn ghost" id="markRead">Mark all as read</button>
       <button class="btn ghost danger-text" id="delRead">Delete read</button><button class="btn danger" id="delAll">Delete all</button></div></div>
-    ${d.recent.length ? d.recent.map(n => `<div class="ord ${n.read ? '' : 'unread'}"><div class="ord-top"><strong>${esc(n.title)}</strong>
+    ${d.recent.length ? d.recent.map(n => `<div class="ord notif ${n.read ? '' : 'unread'}" data-nid="${n.id}" data-kind="${esc(n.kind)}" data-ref="${esc(n.ref || '')}" title="Open">
+      <div class="ord-top"><strong>${esc(n.title)} ${n.read ? '' : '<em class="new-pill">New</em>'}</strong>
       <span class="ord-right"><small class="muted">${fmtDate(n.created)}</small><button class="rm danger-text" data-delnotif="${n.id}" title="Delete this notification">Delete</button></span></div><p class="small">${esc(n.body)}</p></div>`).join('') : '<p class="muted">No notifications.</p>'}`);
   $('#markRead').addEventListener('click', async () => { await api('/admin/notifications/read', { method: 'POST' }); poll(); renderNotifs(); });
   const bulk = (mode, text) => async () => {
@@ -200,8 +212,9 @@ async function renderNotifs() {
   $('#delAll').addEventListener('click', bulk('all', 'Delete ALL notifications? This cannot be undone.'));
   $('#panel').onclick = async e => {
     if (e.target.dataset.go) { showTab(e.target.dataset.go); return; }
-    const id = e.target.dataset.delnotif; if (!id) return;
-    await api('/admin/notifications/' + id, { method: 'DELETE' }); poll(); renderNotifs();
+    const id = e.target.dataset.delnotif;
+    if (id) { await api('/admin/notifications/' + id, { method: 'DELETE' }); poll(); renderNotifs(); return; }
+    const item = e.target.closest('[data-nid]'); if (item) openNotif(item);   // opening it marks it as read and goes to the item
   };
 }
 
@@ -319,7 +332,7 @@ async function renderOrders(keep) {
   if (keep && ae && ae.closest('.ord-actions, .adm-save')) return;   // don't disturb typing
   ordersData = d; updateOrderBadge();
   panel(`<div class="adm-save"><div><strong id="ordCount"></strong>
-    <p class="muted small">Check your bank / Fawran / Ooredoo Money statement for the payment reference and amount, then mark the payment as confirmed. Apple Pay payments confirm themselves.</p></div>
+    <p class="muted small">Orders paid with SkipCash or Apple Pay are confirmed automatically. Use "Confirm payment" only for a payment you have checked yourself.</p></div>
     <div class="adm-btns"><input id="orderSearch" type="search" placeholder="Search order no., name, phone…" value="${esc(orderSearch)}">
       <select id="orderFilter"><option value="">All statuses</option>${d.statuses.map(s => `<option ${s === orderFilter ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <button class="btn ghost" data-export="orders">Export CSV</button></div></div>
@@ -619,6 +632,9 @@ function enqBubble(q, m) {
 }
 function drawEnqPane() {
   const q = enqData.find(x => x.id === enqSel); if (!q) return;
+  if (q.seen === 0 || q.seen === undefined) {                 // opened: the "new enquiry" badge goes away
+    q.seen = 1; api(`/admin/enquiries/${q.id}/seen`, { method: 'POST' }).then(() => poll()).catch(() => {});
+  }
   const intl = enqDigits(q);
   const photos = q.images.length ? `<div class="enq-photos">${q.images.map(im => `<a href="${esc(im.url)}" target="_blank" rel="noopener" title="Open photo ${im.n}"><img src="${esc(im.url)}" alt="Reference photo ${im.n}" loading="lazy"></a>`).join('')}</div>` : '';
   const thread = q.messages.map(m => {
@@ -805,12 +821,10 @@ setInterval(() => { if (tab === 'chats' && !document.hidden) refreshChat(); }, 4
 async function renderSettings() {
   if (!isOwner()) { panel('<p class="muted">Only owner accounts can change company, payment and alert settings.</p>'); return; }
   const { settings: s } = await api('/admin/settings');
-  const c = s.company, ib = s.payments.iban, fw = s.payments.fawran, oo = s.payments.ooredoo, sh = s.shipping;
+  const c = s.company, sh = s.shipping;
   const v = x => esc(x ?? '');
   panel(`
   <form id="setForm" novalidate>
-    <div class="set-warn" id="setWarn" ${ibanOk(ib.iban) ? 'hidden' : ''}>Your bank (IBAN) details are not set yet, so customers cannot see the bank-transfer option. Enter your company's Qatar IBAN below.</div>
-
     <h3>Company details</h3>
     <div class="set-grid">
       <label>Company name<input name="company.name" value="${v(c.name)}"></label>
@@ -821,48 +835,41 @@ async function renderSettings() {
       <label>WhatsApp (digits, with 974)<input name="company.whatsapp" value="${v(c.whatsapp)}"></label>
     </div>
 
-    <h3>Bank transfer – Qatar (IBAN)</h3>
-    <label class="chk"><input type="checkbox" name="payments.iban.enabled" ${ib.enabled ? 'checked' : ''}> Offer bank transfer to customers</label>
-    <div class="set-grid">
-      <label>Bank name<input name="payments.iban.bankName" value="${v(ib.bankName)}" placeholder="e.g. your bank's registered name"></label>
-      <label>Account holder name<input name="payments.iban.accountName" value="${v(ib.accountName)}"></label>
-      <label>Account number<input name="payments.iban.accountNumber" value="${v(ib.accountNumber)}"></label>
-      <label>IBAN (Qatar – 29 characters, starts with QA)<input name="payments.iban.iban" id="ibanInput" value="${v(ib.iban)}" placeholder="QA00 XXXX 0000 0000 0000 0000 0000 0"><small id="ibanHint" class="hint"></small></label>
-      <label>SWIFT / BIC<input name="payments.iban.swift" value="${v(ib.swift)}" placeholder="XXXXQAQA"></label>
-      <label>Branch<input name="payments.iban.branch" value="${v(ib.branch)}"></label>
-    </div>
-
-    <h3>Fawran (Qatar instant payments)</h3>
-    <label class="chk"><input type="checkbox" name="payments.fawran.enabled" ${fw.enabled ? 'checked' : ''}> Offer Fawran</label>
-    <div class="set-grid">
-      <label>Fawran alias – mobile number or IBAN<input name="payments.fawran.alias" value="${v(fw.alias)}" placeholder="5555 1234"></label>
-      <label>Account name<input name="payments.fawran.accountName" value="${v(fw.accountName)}"></label>
-      <label>Bank<input name="payments.fawran.bankName" value="${v(fw.bankName)}"></label>
-    </div>
-
-    <h3>Ooredoo Money</h3>
-    <label class="chk"><input type="checkbox" name="payments.ooredoo.enabled" ${oo.enabled ? 'checked' : ''}> Offer Ooredoo Money</label>
-    <div class="set-grid">
-      <label>Ooredoo Money number (8 digits)<input name="payments.ooredoo.number" value="${v(oo.number)}" placeholder="5555 1234"></label>
-      <label>Account name<input name="payments.ooredoo.accountName" value="${v(oo.accountName)}"></label>
-    </div>
-
     <h3>Google sign-in</h3>
     <p class="muted small">Lets customers create an account and sign in with their Google account. Create a free <strong>OAuth Client ID (Web application)</strong> at console.cloud.google.com → APIs &amp; Services → Credentials, add <code>${esc(location.origin)}</code> under <em>Authorised JavaScript origins</em>, then paste the Client ID here. See README.txt for the steps.</p>
     <div class="set-grid">
       <label>Google Client ID<input name="google.clientId" value="${v((s.google || {}).clientId)}" placeholder="1234567890-abc123.apps.googleusercontent.com"></label>
     </div>
 
-    <h3>Card payments (secure online)</h3>
+    <h3>Online payments for customers</h3>
+    <p class="muted small">Customers pay online with <strong>SkipCash</strong> or <strong>Apple Pay</strong>. The money goes to the bank account you link with each provider. Card numbers are typed only on the provider's secure page – never on this website.</p>
     ${(() => {
-      const c = (s.payments || {}).card || {};
-      return `<p class="muted small">Lets customers pay by bank card on the <strong>secure page of your payment provider</strong>. Card numbers are typed only on that page and are never stored here. The money is paid into the bank account you link with the provider (use a QAR merchant account – for example MyFatoorah works with Qatari banks; ask your bank which provider they recommend).</p>
-      <div class="set-warn">Before you switch this on: open a merchant account with the provider, check that its currency is <strong>QAR</strong>, and paste the <strong>API token</strong> from its dashboard below. Keep the token private – do not send it by e-mail or WhatsApp.</div>
-      <label class="chk"><input type="checkbox" name="payments.card.enabled" ${c.enabled ? 'checked' : ''}> Offer card payment at checkout</label>
+      const k = (s.payments || {}).skipcash || {};
+      return `<h4>SkipCash</h4>
+      <p class="muted small">Copy the Key ID, Key Secret, Client ID and Webhook key from the SkipCash merchant portal (Online Payments). Start with the <strong>test</strong> keys.</p>
+      <label class="chk"><input type="checkbox" name="payments.skipcash.enabled" ${k.enabled ? 'checked' : ''}> Offer SkipCash at checkout</label>
       <div class="set-grid">
-        <label>API token ${c.hasToken ? '<small class="hint good">✓ saved – leave blank to keep it</small>' : ''}<input type="password" name="payments.card.apiToken" autocomplete="new-password" placeholder="${c.hasToken ? 'Saved – leave blank to keep' : 'paste the token from the provider'}"></label>
-        <label class="chk"><input type="checkbox" name="payments.card.test" ${c.test !== false ? 'checked' : ''}> Test mode (sandbox – no real money)</label>
-      </div>`;
+        <label>Key ID<input name="payments.skipcash.keyId" value="${v(k.keyId)}"></label>
+        <label>Client ID<input name="payments.skipcash.clientId" value="${v(k.clientId)}"></label>
+        <label>Key Secret ${k.has_keySecret ? '<small class="hint good">✓ saved – leave blank to keep</small>' : ''}<input type="password" name="payments.skipcash.keySecret" autocomplete="new-password" placeholder="${k.has_keySecret ? 'Saved – leave blank to keep' : 'paste the Key Secret'}"></label>
+        <label>Webhook key ${k.has_webhookKey ? '<small class="hint good">✓ saved – leave blank to keep</small>' : ''}<input type="password" name="payments.skipcash.webhookKey" autocomplete="new-password" placeholder="${k.has_webhookKey ? 'Saved – leave blank to keep' : 'paste the webhook key'}"></label>
+        <label class="chk"><input type="checkbox" name="payments.skipcash.test" ${k.test !== false ? 'checked' : ''}> Test mode (sandbox – no real money)</label>
+      </div>
+      <p class="muted small">Webhook address to enter in the SkipCash portal: <code>${esc(location.origin)}/api/skipcash/notify</code></p>`;
+    })()}
+    ${(() => {
+      const m = s.mail || {};
+      return `<h4>E-mail sending (password codes)</h4>
+      <p class="muted small">Sends the 6-digit code when a customer or admin resets a password. In cPanel create a mailbox such as <strong>info@lofan.qa</strong> (Email Accounts), then enter its details here. The host and port are shown in cPanel under "Connect Devices".</p>
+      <div class="set-grid">
+        <label>Mail server (host)<input name="mail.host" value="${v(m.host)}" placeholder="mail.lofan.qa"></label>
+        <label>Port<input type="number" name="mail.port" min="1" max="65535" value="${v(m.port || 587)}"></label>
+        <label>Connection<select name="mail.security">${[['tls', 'TLS (port 587) – recommended'], ['ssl', 'SSL (port 465)'], ['none', 'None (not recommended)']].map(([val, lbl]) => `<option value="${val}" ${(m.security || 'tls') === val ? 'selected' : ''}>${lbl}</option>`).join('')}</select></label>
+        <label>Mailbox user (the full address)<input name="mail.user" value="${v(m.user)}" placeholder="info@lofan.qa"></label>
+        <label>Mailbox password ${m.hasPassword ? '<small class="hint good">✓ saved – leave blank to keep</small>' : ''}<input type="password" name="mail.password" autocomplete="new-password" placeholder="${m.hasPassword ? 'Saved – leave blank to keep' : 'the mailbox password'}"></label>
+        <label>"From" address (what the customer sees)<input name="mail.from" value="${v(m.from)}" placeholder="info@lofan.qa"></label>
+      </div>
+      <button type="button" class="btn ghost" data-test="mail">Send a test e-mail to me</button>`;
     })()}
 
     <h3>Enquiry reply text (WhatsApp / SMS)</h3>
@@ -908,11 +915,10 @@ async function renderSettings() {
       <label>Reply when a customer asks about an order but gives no order number<textarea name="chat.orderHelp" rows="2" maxlength="400">${v(c.orderHelp)}</textarea></label>`;
     })()}
 
-    <h3>Order rules – confirming payments</h3>
+    <h3>Unpaid orders</h3>
     ${(() => {
       const o = s.orders || {};
-      return `<p class="muted small">An order only becomes <strong>CONFIRMED</strong> after you have verified its payment (Orders → Confirm payment). Until then the customer sees "awaiting payment" and the items are only reserved.</p>
-      <label class="chk"><input type="checkbox" name="orders.requireReceipt" ${o.requireReceipt !== false ? 'checked' : ''}> Customers must upload a payment receipt (screenshot) when they submit a bank / Fawran / Ooredoo payment</label>
+      return `<p class="muted small">Orders are confirmed automatically when SkipCash or Apple Pay approves the payment. An order that is not paid in time is cancelled and its items return to the shop.</p>
       <div class="set-grid"><label>Release unpaid orders after (hours – 0 = never)<input type="number" min="0" max="720" name="orders.unpaidHours" value="${o.unpaidHours ?? 24}"></label></div>`;
     })()}
 
@@ -957,13 +963,6 @@ async function renderSettings() {
     <div class="set-bar"><button class="btn" type="submit">Save Settings</button><p class="note" id="setNote"></p></div>
   </form>`);
 
-  const hint = () => {
-    const val = $('#ibanInput').value.trim(), h = $('#ibanHint');
-    h.textContent = !val ? '' : ibanOk(val) ? '✓ Valid Qatar IBAN' : 'Not a valid Qatar IBAN yet (QA + 2 digits + 4-letter bank code + 21 characters)';
-    h.className = 'hint ' + (!val ? '' : ibanOk(val) ? 'good' : 'badc');
-  };
-  $('#ibanInput').addEventListener('input', hint); hint();
-
   $('#setForm').addEventListener('submit', async e => {
     e.preventDefault();
     const body = {};
@@ -973,16 +972,21 @@ async function renderSettings() {
       o[path.at(-1)] = el.type === 'checkbox' ? el.checked : el.value;
     });
     const note = $('#setNote'); note.className = 'note';
-    try { await api('/admin/settings', { method: 'PUT', body }); note.textContent = 'Saved. Customers will see these details immediately.'; $('#setWarn').hidden = ibanOk($('#ibanInput').value); toast('Settings saved'); }
+    try { await api('/admin/settings', { method: 'PUT', body }); note.textContent = 'Saved. Customers will see these details immediately.'; toast('Settings saved'); }
     catch (err) { note.textContent = err.message; note.classList.add('err'); }
   });
   $('#setForm').addEventListener('click', async e => {   // "Send test WhatsApp / Telegram" (uses the settings you saved)
     const b = e.target.closest('[data-test]'); if (!b) return;
     const note = $('#testNote'); note.className = 'note'; note.textContent = 'Sending…'; b.disabled = true;
     try {
-      const r = await api('/admin/alerts/test', { method: 'POST', body: { channel: b.dataset.test } });
-      note.innerHTML = r.results.map(x => `${x.ok ? '✓ Sent' : '✗ Failed'} – ${esc(x.channel)} to ${esc(x.to)}${x.ok ? '' : ': ' + esc(x.detail || 'unknown error')}`).join('<br>');
-      if (r.results.some(x => !x.ok)) note.classList.add('err');
+      if (b.dataset.test === 'mail') {                     // a test e-mail to the owner's address
+        const r = await api('/admin/mail/test', { method: 'POST', body: {} });
+        note.innerHTML = `✓ Sent – check the inbox of ${esc(r.sentTo)} (and the spam folder).`;
+      } else {
+        const r = await api('/admin/alerts/test', { method: 'POST', body: { channel: b.dataset.test } });
+        note.innerHTML = r.results.map(x => `${x.ok ? '✓ Sent' : '✗ Failed'} – ${esc(x.channel)} to ${esc(x.to)}${x.ok ? '' : ': ' + esc(x.detail || 'unknown error')}`).join('<br>');
+        if (r.results.some(x => !x.ok)) note.classList.add('err');
+      }
     } catch (err) { note.textContent = err.message; note.classList.add('err'); }
     b.disabled = false;
   });
@@ -1023,7 +1027,8 @@ function bindOtp() {
     send.disabled = true;
     try {
       const r = await api('/me/otp/request', { method: 'POST', body: {} });
-      form.hidden = false; $('#otpNote').className = 'note'; $('#otpNote').textContent = `The code was sent to ${r.sentTo}. Check your spam folder if it does not arrive.`;
+      form.hidden = false; $('#otpNote').className = 'note';
+      $('#otpNote').textContent = `The code was sent to ${r.sentTo}. Check your spam folder if it does not arrive.${r.devCode ? ' Test mode – your code: ' + r.devCode : ''}`;
       toast('Code sent by e-mail');
     } catch (err) { toast(err.message); }
     send.disabled = false;

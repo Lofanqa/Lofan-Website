@@ -193,25 +193,13 @@
    "domainFile": ""
   },
   "payments": {
-   "iban": {
-    "enabled": true,
-    "bankName": "",
-    "accountName": "Lofan Development & Trading",
-    "accountNumber": "",
-    "iban": "",
-    "swift": "",
-    "branch": "Doha, Qatar"
-   },
-   "fawran": {
-    "enabled": true,
-    "alias": "66404222",
-    "accountName": "Lofan Development & Trading",
-    "bankName": ""
-   },
-   "ooredoo": {
-    "enabled": true,
-    "number": "66404222",
-    "accountName": "Lofan Development & Trading"
+   "skipcash": {
+    "enabled": false,
+    "test": true,
+    "keyId": "",
+    "keySecret": "",
+    "clientId": "",
+    "webhookKey": ""
    }
   }
  }

@@ -20,7 +20,7 @@ START IT (VS Code)
 
 PAGES
   index.html    Home, shop, cart, enquiry form
-  payment.html  Delivery details -> choose IBAN / Fawran / Ooredoo Money -> confirm payment
+  payment.html  Delivery details -> pay with Apple Pay or SkipCash (secure online payment)
   account.html  Customer profile + order tracking
   admin.html    Your dashboard
 
@@ -30,15 +30,13 @@ FIRST TIME: CREATE THE ADMIN ACCOUNT
   Customers can never become admins. More admin accounts (up to 10, "Owner" or "Staff") are added by the owner in
   Admin > Security. There you also see who is signed in, the access & activity log, and "Reset test data".
 
-THEN: ADD COMPANY & BANK DETAILS  (Admin -> Company & Payments)
+THEN: ADD COMPANY DETAILS  (Admin -> Company & Payments)
   - Company name, CR number, address, phone, email
-  - Bank transfer: bank name, account holder, account number, Qatar IBAN (29 characters,
-    starts with QA – checked automatically), SWIFT/BIC
-  - Fawran alias (Qatar mobile number or IBAN)
-  - Ooredoo Money number
   - Delivery fee and free-delivery limit
-  Click Save. Customers see these details immediately on the payment page.
-  A method only shows to customers when its details are filled in.
+  - Online payments (SkipCash) and Apple Pay: see ONLINE PAYMENTS below
+  - E-mail sending (SMTP mailbox for the password-reset codes): see PASSWORD RESET CODES below
+  Click Save. Customers see the company details immediately.
+  A payment method only shows to customers when it is switched on and its keys are filled in.
 
 HOW A CUSTOMER ORDERS
   1. Adds items to the cart and clicks Checkout.
@@ -47,17 +45,17 @@ HOW A CUSTOMER ORDERS
      still missing; the server checks it too). Existing customers can still sign in with their old password.
      Search (top bar, next to My Account): finds items by name, category or description - several words, capital
      letters and plurals all work - and shows the number of matches; it stays visible while you scroll the shop.
-  3. payment.html: delivery details -> order is created (stock reserved) -> they pick
-     IBAN / Fawran / Ooredoo Money, see your details and a payment reference (e.g. LF-AB12CD),
-     pay from their bank app, then enter the transaction number and upload the receipt screenshot.
+  3. payment.html: delivery details -> order is created (stock reserved) -> they pay with Apple Pay or SkipCash
+     (SkipCash opens its own secure payment page).
   4. They track the order in My Account > My Orders (updates every 15 seconds).
-  An order is NOT confirmed until its payment is verified: it shows "awaiting payment" -> "verifying payment" ->
-  "Order confirmed" only after YOU press "Confirm payment" (a receipt screenshot is required by default; unpaid orders are
-  released after 24 hours - both can be changed in Admin > Company & Payments > Order rules).
+  An order is confirmed automatically as soon as the payment provider reports the payment as paid. Unpaid orders are
+  released after 24 hours (changeable in Admin > Company & Payments > Unpaid orders), and their stock goes back.
 
 HOW YOU GET NOTIFIED (keep admin.html open in a tab)
-  - Pop-up + sound when a customer places an order, when they submit a payment, and when
+  - Pop-up + sound when a customer places an order, when a payment is received, and when
     someone sends an enquiry. Red badges on the tabs, and the browser tab title shows (n).
+  - Works like a messaging app: opening a notification marks it read and removes its badge. The Enquiries tab shows
+    a red badge for new enquiries and clears it when you open the enquiry.
   - Allow browser notifications when asked, to also get alerts when the tab is in the background.
   - Notifications tab: delete one notification, "Delete read" or "Delete all". Chat: the x next to a message deletes it,
     "Clear chat" empties a conversation.
@@ -66,10 +64,9 @@ HOW YOU GET NOTIFIED (keep admin.html open in a tab)
     a map link. Free service CallMeBot, one-time activation (2 minutes). A free Telegram message is also possible.
     Step-by-step: hosting/README-HOSTING.txt ("ORDER ALERTS ON YOUR WHATSAPP"). SMS / Twilio was removed.
 
-AFTER A PAYMENT IS SUBMITTED
-  Admin > Orders: check your bank / Fawran / Ooredoo Money statement for the reference and
-  amount, then click "Confirm payment". Later set: Preparing > Out for delivery > Delivered.
-  Add an optional note – the customer sees it in their order history.
+AFTER A PAYMENT
+  Paid orders are confirmed automatically (SkipCash or Apple Pay). Admin > Orders shows the payment reference.
+  Then set: Preparing > Out for delivery > Delivered. Add an optional note – the customer sees it in their order history.
   Cancelling an order puts the stock back automatically.
 
 ADD / UPDATE STOCK  (Admin > Products & Stock)
@@ -155,10 +152,21 @@ CUSTOM ORDERS AND ENQUIRIES
   - Admin > Enquiries is an inbox: each enquiry is a conversation. Reply with WhatsApp or SMS (the text is ready to send;
     the owner can change it in Company & Payments). Notes stay internal.
 
-CARD PAYMENT AND PASSWORD CODES (details in hosting/README-HOSTING.txt)
-  - Card payment goes to the secure page of a payment provider (for example MyFatoorah); card details are never typed on
-    this website. Switch it on in Admin > Company & Payments once you have the provider's API token.
-  - "Forgot password?" on the admin sign-in page sends a 6-digit code to the admin's e-mail.
+ONLINE PAYMENTS: SKIPCASH  (Admin > Company & Payments > Online payments for customers)
+  - Customers pay on SkipCash's own secure page (card or SkipCash wallet). Card details never reach this website.
+  - Fill in the four keys from the SkipCash merchant portal: Key ID, Key Secret, Client ID and Webhook Key.
+    Leave "Test mode" ticked until SkipCash confirms your live account, then untick it and save with live keys.
+  - Webhook address to give SkipCash:  https://YOUR-DOMAIN/api/skipcash/notify   (for example https://lofan.qa/api/skipcash/notify)
+  - Before an order is confirmed the server asks SkipCash for the payment status, so a fake "paid" message cannot confirm it.
+  - SkipCash can only be switched on after its keys are saved. The keys are never shown again on the page.
+  - Apple Pay: see APPLE PAY SETUP above. Both are offered on the payment page when they are switched on.
+
+PASSWORD RESET CODES (E-MAIL)  (Admin > Company & Payments > E-mail sending)
+  - "Forgot password?" (customers and admins) sends a 6-digit code to the e-mail address. The customer enters it in the
+    pop-up and then chooses a new password. The code is valid for 10 minutes.
+  - The codes need a mailbox on your hosting: enter its server (for example mail.lofan.qa), port (465 with SSL or 587
+    with TLS), the mailbox user (info@lofan.qa), its password and the "From" address, then press "Send a test e-mail to me".
+  - If nothing arrives, check the spam folder, then the mailbox settings above. The page shows the reason when sending fails.
 
 SECURITY AND APPROVALS (owner / staff)
   - Owner: all settings, security, activity log and approvals. Staff: their own security page only; their requests for
@@ -226,7 +234,7 @@ SHOP ITEMS
   (browse only) with a red banner telling you to start the server.
 WHERE DATA LIVES  (on this PC)
   data/dev.sqlite      accounts, orders, products, settings of your LOCAL test copy (back this file up if it matters)
-  data/receipts/       uploaded payment receipts (local test)
+  hosting/private/enquiry-images/   reference photos sent with enquiries (local test; git ignores this folder)
   images/products/     photos of items you add
   Do not share the data folder. The server never serves it to visitors.
   (On lofan.qa the same information is in the MySQL database and in public_html/private.)
@@ -247,16 +255,17 @@ PUBLISH ON lofan.qa (cPanel hosting)  <- the easy way
 
 SELLING TO REAL CUSTOMERS
   The live site is on cPanel hosting (lofan.qa) - see "PUBLISH ON lofan.qa" above. Before announcing it:
-  1. Open https://lofan.qa/admin.html, enter your REAL bank / Fawran / Ooredoo Money details, check prices and stock.
-  2. Admin > Security > Reset test data (removes the test customers and orders).
-  3. Set up the WhatsApp alerts and add admin accounts for your team (Admin > Security).
-  4. In Google Cloud add https://lofan.qa under Authorised JavaScript origins (only if you use Google sign-in).
-  5. Back up weekly (cPanel > Backup, or phpMyAdmin > Export) - see hosting/README-HOSTING.txt.
-  Payments: customers pay by IBAN / Fawran / Ooredoo Money and you confirm each payment in admin (free for both sides).
-  Taking card payments automatically needs a payment gateway / merchant account from a Qatar bank or provider (fees apply).
+  1. Open https://lofan.qa/admin.html, check company details, prices and stock.
+  2. Admin > Company & Payments: enter your live SkipCash keys (Test mode off), the webhook address, and your mailbox
+     for password-reset e-mails. Make a test payment in SkipCash test mode first.
+  3. Admin > Security > Reset test data (removes the test customers and orders).
+  4. Set up the WhatsApp alerts and add admin accounts for your team (Admin > Security).
+  5. In Google Cloud add https://lofan.qa under Authorised JavaScript origins (only if you use Google sign-in).
+  6. Back up weekly (cPanel > Backup, or phpMyAdmin > Export) - see hosting/README-HOSTING.txt.
+  Payments: customers pay online with SkipCash (and Apple Pay once approved). Confirm the fee terms with SkipCash and your provider.
 IMPORTANT
-  The IBAN in examples (QA58 DOHB 0000 1234 5678 90AB CDEF G) is a public sample, not real.
-  Enter your real company IBAN before accepting payments.
+  Enter your real SkipCash keys and mailbox before taking payments. Never share the keys or the mailbox password in chat
+  or e-mail.
 
 
 

@@ -49,7 +49,8 @@ STEP 5  Turn on SSL (https)
 
 STEP 6  Create the admin account and company details
   Open  https://lofan.qa/admin.html  -> "Create the admin account" (choose a strong password, 10+ characters).
-  Admin > Company & Payments: your CR number, address, WhatsApp, your REAL bank / IBAN, Fawran and Ooredoo Money.
+  Admin > Company & Payments: your CR number, address, WhatsApp, the SkipCash keys (test keys first), and the mailbox
+  used for the password-reset e-mails.
   Admin > Products & Stock: check prices and stock.   Place a test order as a customer, then confirm it in Admin.
   After the test you can delete the test customer in Admin > Customers.
 
@@ -62,7 +63,7 @@ STEP 7  Share it
 ================= PART 2 – EDITING YOUR WEBSITE LATER =================
 
   Products, prices, stock, categories ....... Admin > Products & Stock   (live immediately, photos are uploaded there)
-  Company details, bank / payment methods ... Admin > Company & Payments
+  Company details, online payments, e-mail .. Admin > Company & Payments
   Texts on the pages ......................... edit index.html (headings, about text, contact) in File Manager > Edit
                                                or edit the file on your PC and upload it again (overwrite)
   Images ..................................... upload a new file over the old one in  images/  (same file name).
@@ -86,8 +87,8 @@ STEP 7  Share it
      2. cPanel > File Manager > public_html > Upload > dist/lofan-update.zip.
      3. Right-click the zip > Extract (into public_html) > if asked, overwrite existing files > then delete the zip.
      4. Open the website once and press Ctrl+F5.  Done.
-  What is kept: customers, orders, chats, products, prices, stock, settings, admin accounts, payment receipts, the photos
-  you uploaded in Admin, your bank details, WhatsApp / Telegram keys. They live in the MySQL database and in the private folder,
+  What is kept: customers, orders, chats, products, prices, stock, settings, admin accounts, old payment receipts, the photos
+  you uploaded in Admin, your SkipCash keys, mailbox password, WhatsApp / Telegram keys. They live in the MySQL database and in the private folder,
   and the update zip never contains them.
   New database fields are added automatically the first time the new version runs (no data is lost, nothing to click).
   Your product photos from Admin are in images/products; the update zip only adds the default photos, so yours stay.
@@ -108,27 +109,18 @@ STEP 7  Share it
   Do this once, right before you announce the website. Never do it later by mistake: real orders would be deleted too.
 
 
-================= HOW AN ORDER IS CONFIRMED (payment authentication) =================
+================= HOW AN ORDER IS CONFIRMED (online payment) =================
 
-  An order is only CONFIRMED after the payment is verified:
-     Awaiting payment  -> the customer sees "Not confirmed - awaiting payment" and a Complete Payment button.
-     Payment submitted -> the customer sent the transaction number and a receipt (screenshot). You get a pop-up, an
-                          WhatsApp / Telegram alert and the order shows in Orders with the receipt.
-     Payment confirmed -> YOU press "Confirm payment" after checking your bank / Fawran / Ooredoo statement. Only now the
-                          customer sees "Order confirmed".  (Apple Pay / card payments confirm by themselves.)
+  Customers pay online only: SkipCash or Apple Pay. An order is confirmed by the payment provider, not by a screenshot:
+     Awaiting payment  -> the customer sees "Not confirmed - awaiting payment" and can pay again from the payment page.
+     Payment confirmed -> the server checks the payment with the provider (SkipCash status check) and then confirms the
+                          order. The customer sees "Order confirmed" and you get a notification.
      Then: Preparing > Out for delivery > Delivered.   Cancelled orders put the items back in stock.
-  Rules you can change in Admin > Company & Payments > "Order rules":
-     - Customers must upload a payment receipt (default ON).
+  The old bank transfer, Fawran, Ooredoo Money and manual receipt options were removed.
+  Rule you can change in Admin > Company & Payments > "Unpaid orders":
      - Unpaid orders are released after N hours (default 24): the order is cancelled, the stock is returned and the customer
        is told "Not paid within N hours". Set 0 to never release.
-
-  Which Qatar bank / payment method is free?  Bank transfer to your IBAN, Fawran (instant bank transfer) and Ooredoo Money
-  cost the customer and you nothing extra from this website; you confirm each payment yourself (steps above).
-  Fully automatic CARD payment (customer pays on a card page, order confirms by itself) needs a payment gateway / merchant
-  account from a Qatar bank or a provider - that always has fees and a sign-up with documents. Ask your bank which gateway
-  they offer for online shops in Qatar; once you pick one, the website can be connected to it (a small change in
-  psp_charge() in hosting/private/lib.php). Keep the gateway's secret keys private: enter them only in Admin or on the server,
-  never in a chat, e-mail or GitHub.  Fees and approval rules differ per bank - confirm them with the bank before you decide.
+  Never store the SkipCash keys in a chat, e-mail or GitHub. Enter them only in Admin > Company & Payments.
 
 
 ================= ADMIN ACCOUNTS, SIGN-INS AND ACTIVITY LOG =================
@@ -198,36 +190,40 @@ STEP 7  Share it
   Each reply is saved in the conversation and the enquiry is marked "Replied". Delete an enquiry = its photos and
   conversation are removed for good.
 
-================= CARD PAYMENTS (SECURE, ON THE PROVIDER'S PAGE) =================
+================= ONLINE PAYMENTS: SKIPCASH (AND APPLE PAY) =================
 
-  Customers can pay by bank card. When they press "Pay securely by card" they are taken to the secure payment page of
-  your payment provider. They type their card number, expiry and security code THERE – never on lofan.qa – and the money
-  is paid into the bank account you link with that provider. When the provider reports the payment as approved, the
-  order becomes "Payment confirmed" automatically (the server checks the payment with the provider itself).
-  The option appears at checkout only after you switch it on (Admin > Company & Payments > Card payments).
+  SkipCash: the customer chooses SkipCash on the payment page and is taken to SkipCash's own secure payment page. They
+  pay there by card or SkipCash wallet. Card details never reach lofan.qa. When SkipCash reports the payment, the order is
+  confirmed automatically (the server asks SkipCash for the status itself before confirming).
 
-  Setup (you do this, it needs your own account):
-     1. Open a merchant account with a payment provider that works with Qatari banks. MyFatoorah is one option; your bank
-        may also recommend one. Make sure the account currency is QAR and the settlement bank account is your company account.
-     2. In the provider's dashboard create an API token and copy it.
-     3. Admin > Company & Payments > Card payments: paste the token, leave "Test mode" ticked for the first tests, tick
-        "Offer card payment at checkout" and press Save.
-     4. Test one order with the provider's test card numbers (listed in the provider's documentation), then untick
-        "Test mode" and save again to take real payments.
-  Notes: the provider's return addresses must be your https:// address (lofan.qa), so test on the live site, not on
-  localhost. Fees are charged by the provider; ask them for the price list before you switch it on.
+  Setup (you do this, it needs your own SkipCash merchant account; the keys come from the SkipCash merchant portal):
+     1. Admin > Company & Payments > "Online payments for customers" > SkipCash.
+     2. Paste the Key ID, Key Secret, Client ID and Webhook Key. Start with the TEST keys and leave "Test mode" ticked.
+     3. Give SkipCash this webhook address (it is also shown on the page):
+            https://lofan.qa/api/skipcash/notify
+     4. Tick "Offer SkipCash at checkout" and press Save. (It cannot be switched on until the keys are saved.)
+     5. Place a test order and pay it in SkipCash test mode. Then switch to the live keys, untick "Test mode", and save.
+  Keys are never shown again on the page: a saved key shows "saved – leave blank to keep".
+
+  Apple Pay: a separate setup with Apple and your payment provider. See README.txt, section "APPLE PAY SETUP". It appears
+  on the payment page only after it is switched on in Admin.
 
 ================= PASSWORD RESET BY E-MAIL CODE (ADMINS AND STAFF) =================
 
   On the admin sign-in page press "Forgot password?", enter your login e-mail, and a 6-digit code is sent to it. Enter the
   code and a new password (8+ characters, letters and numbers). The code is valid for 10 minutes and can be used once.
   Signed-in staff can do the same from Admin > Security > "Forgot your password?".
-  The codes are sent with the e-mail service of your hosting (cPanel). Ask us to check the mail settings if they do not
-  arrive; they may land in the spam folder the first time. The admin's login e-mail must be a real mailbox you can read.
+  Customers get the same code on the website: "Forgot password?" in the sign-in pop-up > enter the code > new password.
+  The codes are sent through the mailbox you set in Admin > Company & Payments > "E-mail sending":
+     - Mail server (for example mail.lofan.qa), port 465 with SSL (or 587 with TLS), the mailbox user (info@lofan.qa),
+       its password and the "From" address. Press "Send a test e-mail to me" to check it.
+     - Create the mailbox in cPanel > Email Accounts first. The password is kept on the server and is never shown again.
+  If a code does not arrive, check the spam folder, then the settings above; the page shows the reason when sending fails.
+  The admin's login e-mail and each customer's e-mail must be a real mailbox you can read.
 
 ================= WHO SEES WHAT (OWNER AND STAFF) =================
 
-  Owner: everything – Company & Payments (bank, card, reply text, alerts), Security (who is signed in, admin accounts,
+  Owner: everything – Company & Payments (SkipCash, Apple Pay, e-mail, reply text, alerts), Security (who is signed in, admin accounts,
   activity log, reset of test data), approvals, and all orders, products, chat and enquiries.
   Staff: Orders, Products & Stock (stock and "show in shop" directly; prices and details need the owner's approval),
   Notifications, Chat, Enquiries and Customers. Security shows only THEIR OWN page: sign out of this device, sign out
@@ -334,7 +330,8 @@ STEP 7  Share it
 
 BACKUPS  (do this weekly)
   cPanel > "Backup" > download a Full Backup, or at least:  phpMyAdmin > your database > Export (SQL)  AND download the
-  folders  public_html/private/receipts  and  public_html/images/products .
+  folders  public_html/private/enquiry-images  (enquiry photos), public_html/private/receipts  (old receipts) and
+  public_html/images/products .
 
 SECURITY CHECKLIST
   [ ] change the cPanel password (it was shared in a chat) and use a strong, unique one

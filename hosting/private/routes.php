@@ -124,32 +124,41 @@ function handle_api($method, $route, $body)
     }
 
     /* password reset for admins and staff with a 6-digit code sent to their login e-mail */
-    if ($R('POST', 'auth/otp/request')) {   // "Forgot password?" on the admin sign-in page. Always the same answer, so it reveals nothing.
+    /* Password reset with a 6-digit code e-mailed to the account (customers, admins and staff) */
+    if ($R('POST', 'auth/otp/request')) {   // "Forgot password?" on the sign-in pages. Same answer for every e-mail, so it reveals nothing.
         $d = $json(); $em = lower(clean($d['email'] ?? '', 120));
         throttle('otpreq' . client_ip(), 6, 900);
-        $u = $em !== '' ? q_one("SELECT * FROM users WHERE email=? AND role='admin' AND (disabled IS NULL OR disabled=0)", [$em]) : null;
-        if ($u) otp_issue($u);
-        return [200, ['ok' => true, 'message' => 'If this e-mail belongs to an admin account, a 6-digit code has been sent to it. The code is valid for ' . OTP_MINUTES . ' minutes.']];
+        $msg = 'If this e-mail belongs to an account, a 6-digit code has been sent to it. The code is valid for ' . OTP_MINUTES . ' minutes.';
+        $u = $em !== '' ? q_one("SELECT * FROM users WHERE email=? AND role IN ('admin','customer') AND (disabled IS NULL OR disabled=0)", [$em]) : null;
+        if (!$u) return [200, ['ok' => true, 'message' => $msg]];
+        $res = otp_issue($u);
+        if (!$res['ok']) throw new ApiError(502, $res['reason'] ?: 'The code could not be sent. Please try again later.');
+        $out = ['ok' => true, 'message' => $msg];
+        if (!empty($res['devCode'])) $out['devCode'] = $res['devCode'];     // local test PC only
+        return [200, $out];
     }
     if ($R('POST', 'auth/otp/confirm')) {   // enter the code and the new password
         $d = $json(); $em = lower(clean($d['email'] ?? '', 120)); $code = str_val($d['code'] ?? ''); $pw = str_val($d['password'] ?? '');
-        $u = $em !== '' ? q_one("SELECT * FROM users WHERE email=? AND role='admin'", [$em]) : null;
+        $u = $em !== '' ? q_one("SELECT * FROM users WHERE email=? AND role IN ('admin','customer')", [$em]) : null;
         if (!$u) throw new ApiError(400, 'The code is not valid or has expired. Please request a new one.', 'code');
         throttle('otp' . $u['id'], 8, 900);                         // wrong guesses are counted (this is kept even if the request fails)
         if (!preg_match('/^\d{6}$/', $code) || !otp_accept($u, $code)) throw new ApiError(400, 'The code is not valid or has expired. Please request a new one.', 'code');
         if (!password_ok($pw)) throw new ApiError(400, PASSWORD_RULE, 'password');
         q_exec("UPDATE users SET salt='', `hash`=? WHERE id=?", [hash_new_pw($pw), (int)$u['id']]);
         q_exec('DELETE FROM sessions WHERE user_id=?', [(int)$u['id']]);   // every device is signed out; sign in again with the new password
-        log_admin('password.reset_code', 'Password reset with an e-mail code', $u);
+        if ($u['role'] === 'admin') log_admin('password.reset_code', 'Password reset with an e-mail code', $u);
         return [200, ['ok' => true]];
     }
-    if ($R('POST', 'me/otp/request')) {     // logged-in admin / staff: send a code to their own login e-mail
+    if ($R('POST', 'me/otp/request')) {     // a signed-in admin / staff: send a code to their own login e-mail
         $u = need_admin();
         throttle('otpreq' . $u['id'], 6, 900);
         $parts = explode('@', (string)$u['email']);
         $masked = substr($parts[0], 0, 1) . '***@' . ($parts[1] ?? '');
-        if (!otp_issue($u)) throw new ApiError(502, 'The code could not be sent right now (or you asked for several codes in the last 15 minutes). Please wait a few minutes and try again.');
-        return [200, ['ok' => true, 'sentTo' => $masked]];
+        $res = otp_issue($u);
+        if (!$res['ok']) throw new ApiError(502, $res['reason'] ?: 'The code could not be sent. Please try again later.');
+        $out = ['ok' => true, 'sentTo' => $masked];
+        if (!empty($res['devCode'])) $out['devCode'] = $res['devCode'];     // local test PC only
+        return [200, $out];
     }
 
     if ($R('POST', 'logout')) {
@@ -302,73 +311,60 @@ function handle_api($method, $route, $body)
         return [200, ['order' => order_out($r)]];
     }
 
-    if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/payment')) {
-        $u = need_user(); $d = $json(); $oid = $m[1];
-        $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
-        if (!$r) throw new ApiError(404, 'Order not found');
-        if ($r['status'] === 'Cancelled') throw new ApiError(409, 'This order was cancelled (it was not paid in time). Please place a new order.');
-        if ($r['status'] !== 'Awaiting payment') throw new ApiError(409, 'Payment was already submitted for this order.');
-        $meth = null;
-        foreach (payment_info()['methods'] as $x) if ($x['id'] === clean($d['method'] ?? '', 20)) $meth = $x;
-        if (!$meth) throw new ApiError(400, 'Please choose a payment method.');
-        $txn = clean($d['txn'] ?? '', 60);
-        if (strlen($txn) < 4) throw new ApiError(400, 'Please enter the transaction / reference number from your payment receipt.');
-        $receipt = null;
-        $rc = $d['receipt'] ?? null;
-        if (is_array($rc) && !empty($rc['data'])) {
-            $receipt = save_data_url($rc['data'], receipts_dir(), $oid, ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'application/pdf' => 'pdf'], 1500000);
-        }
-        if ($receipt === null && !empty(get_settings()['orders']['requireReceipt']))
-            throw new ApiError(400, 'Please upload your payment receipt (a screenshot from your bank / wallet app). It is required to confirm your order.', 'receipt');
-        q_exec('UPDATE orders SET method=?,txn=?,receipt=?,status=? WHERE id=?', [$meth['label'], $txn, $receipt, 'Payment submitted', $oid]);
-        add_event($oid, 'Payment submitted', $meth['label'] . ' · ref ' . $txn);
-        $dn = (json_decode($r['delivery'], true) ?: [])['name'] ?? '';
-        notify('payment', "Payment submitted – $oid", $dn . ' paid ' . (int)$r['total'] . ' ' . CURRENCY . ' via ' . $meth['label'] . " (ref $txn). Please verify.", $oid);
-        queue_alert('submitted', $oid);
-        return [200, ['order' => order_out(order_by_id($oid))]];
-    }
-
-    /* card payment: the customer is sent to the payment provider's own page. Card details never reach this website. */
-    if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/card/start')) {
+    /* SkipCash: the customer is sent to SkipCash's own payment page. Card details never reach this website. */
+    if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/skipcash/start')) {
         $u = need_user(); $oid = $m[1];
         $r = q_one('SELECT * FROM orders WHERE id=? AND user_id=?', [$oid, (int)$u['id']]);
         if (!$r) throw new ApiError(404, 'Order not found');
         if ($r['status'] !== 'Awaiting payment') throw new ApiError(409, 'This order is no longer awaiting payment.');
-        $cfg = get_settings()['payments']['card'];
-        if (empty($cfg['enabled']) || str_val($cfg['apiToken']) === '') throw new ApiError(400, 'Card payment is not available right now. Please choose another payment method.');
-        throttle('card' . $u['id'], 10, 600);
+        $cfg = get_settings()['payments']['skipcash'];
+        if (!skipcash_ready($cfg)) throw new ApiError(400, 'SkipCash is not available right now. Please choose another payment method.');
+        throttle('skipcash' . $u['id'], 10, 600);
         $dl = json_decode($r['delivery'], true) ?: [];
-        $back = site_base_url() . '/api/card/return/' . $oid;
-        $inv = mf_call('/v2/SendPayment', $cfg['apiToken'], [
-            'CustomerName' => slice(str_val($dl['name'] ?? 'Customer'), 60), 'InvoiceValue' => (int)$r['total'],
-            'CustomerEmail' => valid_email(str_val($dl['email'] ?? '')) ? str_val($dl['email']) : str_val($u['email']),
-            'NotificationOption' => 'LNK', 'CustomerReference' => $oid, 'Language' => 'EN',
-            'CallBackUrl' => $back, 'ErrorUrl' => $back . '?fail=1', 'UserDefinedField' => 'Lofan order ' . $oid]);
-        if (empty($inv['InvoiceURL']) || empty($inv['InvoiceId'])) throw new ApiError(502, 'The card payment page could not be opened. Please choose another payment method or try again.');
-        q_exec('UPDATE orders SET method=?,txn=? WHERE id=?', ['Bank card (secure online)', 'MF-' . (int)$inv['InvoiceId'], $oid]);
-        add_event($oid, 'Awaiting payment', 'Card payment page opened (ref MF-' . (int)$inv['InvoiceId'] . ')');
-        return [200, ['url' => (string)$inv['InvoiceURL']]];
+        $parts = preg_split('/\s+/', trim(str_val($dl['name'] ?? '')), 2);
+        $first = slice($parts[0] !== '' ? $parts[0] : 'Customer', 40);
+        $last = slice(($parts[1] ?? '') !== '' ? $parts[1] : $first, 40);
+        $phone = preg_replace('/\D/', '', str_val($dl['phone'] ?? ($u['phone'] ?? '')));
+        $email = valid_email(str_val($dl['email'] ?? '')) ? str_val($dl['email']) : str_val($u['email']);
+        $pay = skipcash_create($cfg, $oid, (int)$r['total'], $first, $last, $phone, $email,
+            site_base_url() . '/api/skipcash/return/' . $oid, site_base_url() . '/api/skipcash/notify');
+        if (empty($pay['id'])) throw new ApiError(502, 'The SkipCash payment page could not be opened. Please try again in a moment.');
+        q_exec('UPDATE orders SET method=?, txn=? WHERE id=?', ['SkipCash', 'SC:' . str_val($pay['id']), $oid]);
+        add_event($oid, 'Awaiting payment', 'SkipCash payment page opened (ref ' . str_val($pay['id']) . ')');
+        return [200, ['url' => (string)$pay['payUrl']]];
     }
-    if ($R('GET', 'card/return/(LF-[A-Z0-9]{6})')) {   // the provider sends the customer back here; the server checks the payment itself
+    /* the customer comes back here from SkipCash; the server asks SkipCash what really happened */
+    if ($R('GET', 'skipcash/return/(LF-[A-Z0-9]{6})')) {
         $oid = $m[1]; $page = 'payment.html?order=' . $oid;
         $r = order_by_id($oid);
         if (!$r) return ['redirect', 'index.html'];
         if ($r['status'] !== 'Awaiting payment') return ['redirect', $page . '&paid=1'];
-        $pid = qs('paymentId', '');
-        $cfg = get_settings()['payments']['card'];
-        if ($pid === '' || !ctype_digit($pid) || str_val($cfg['apiToken']) === '') return ['redirect', $page . '&failed=1'];
-        $st = mf_call('/v2/GetPaymentStatus', $cfg['apiToken'], ['Key' => $pid, 'KeyType' => 'PaymentId']);
-        $invId = (int)($st['InvoiceId'] ?? 0);
-        $paid = ($st['InvoiceStatus'] ?? '') === 'Paid' && $r['txn'] === 'MF-' . $invId && abs((float)($st['InvoiceValue'] ?? 0) - (int)$r['total']) < 0.5;
-        if (!$paid) return ['redirect', $page . '&failed=1'];
-        $n = q_exec("UPDATE orders SET status='Payment confirmed', method='Bank card (secure online)', txn=? WHERE id=? AND status='Awaiting payment'", ['MF-' . $invId . ' / ' . $pid, $oid]);
-        if ($n) {
-            add_event($oid, 'Payment confirmed', 'Card payment approved by the payment provider (ref ' . $pid . ')');
-            $dn = (json_decode($r['delivery'], true) ?: [])['name'] ?? '';
-            notify('payment', "Card payment received – $oid", "$dn paid " . (int)$r['total'] . ' ' . CURRENCY . ' by card. Already confirmed.', $oid);
-            queue_alert('confirmed', $oid);
-        }
+        $cfg = get_settings()['payments']['skipcash'];
+        $pid = strpos((string)$r['txn'], 'SC:') === 0 ? substr((string)$r['txn'], 3) : '';
+        if ($pid === '' || !skipcash_ready($cfg)) return ['redirect', $page . '&failed=1'];
+        $st = skipcash_status($cfg, $pid);
+        if (!skipcash_is_paid($st) || abs((float)($st['amount'] ?? $r['total']) - (int)$r['total']) >= 0.5) return ['redirect', $page . '&failed=1'];
+        confirm_online_payment($oid, 'SkipCash', 'SC:' . $pid, 'SkipCash payment approved (ref ' . $pid . ')');
         return ['redirect', $page . '&paid=1'];
+    }
+    /* SkipCash calls this address when a payment changes. The signature is checked, and the payment is confirmed only after SkipCash says so. */
+    if ($R('POST', 'skipcash/notify')) {
+        $d = json_decode((string)$body, true);
+        if (!is_array($d)) return [400, ['ok' => false]];
+        $cfg = get_settings()['payments']['skipcash'];
+        if (str_val($cfg['webhookKey']) !== '') {
+            $sig = skipcash_signature($cfg['webhookKey'], ['PaymentId' => str_val($d['PaymentId'] ?? ''), 'Amount' => str_val($d['Amount'] ?? ''),
+                'StatusId' => str_val($d['StatusId'] ?? ''), 'TransactionId' => str_val($d['TransactionId'] ?? ''),
+                'Custom1' => str_val($d['Custom1'] ?? ''), 'VisaId' => str_val($d['VisaId'] ?? '')]);
+            if (!hash_equals($sig, (string)($_SERVER['HTTP_AUTHORIZATION'] ?? ''))) return [401, ['ok' => false]];
+        }
+        $oid = str_val($d['TransactionId'] ?? '');
+        $pid = str_val($d['PaymentId'] ?? '');
+        $r = preg_match('/^LF-[A-Z0-9]{6}$/', $oid) ? order_by_id($oid) : null;
+        if ($r && $pid !== '' && $r['status'] === 'Awaiting payment' && (string)$r['txn'] === 'SC:' . $pid && skipcash_ready($cfg)) {
+            if (skipcash_is_paid(skipcash_status($cfg, $pid))) confirm_online_payment($oid, 'SkipCash', 'SC:' . $pid, 'SkipCash payment approved (ref ' . $pid . ')');
+        }
+        return [200, ['ok' => true]];
     }
 
     if ($R('POST', 'orders/(LF-[A-Z0-9]{6})/cancel')) {
@@ -534,11 +530,17 @@ function handle_api($method, $route, $body)
         return [200, ['items' => $items, 'recent' => $recent,
             'unread' => (int)q_val("SELECT COUNT(*) FROM notifications WHERE $vis AND `read`=0", $vp),
             'latest' => (int)q_val("SELECT COALESCE(MAX(id),0) FROM notifications WHERE $vis", $vp),
-            'chatUnread' => (int)q_val("SELECT COUNT(*) FROM messages WHERE sender='customer' AND seen=0")]];
+            'chatUnread' => (int)q_val("SELECT COUNT(*) FROM messages WHERE sender='customer' AND seen=0"),
+            'enqNew' => (int)q_val('SELECT COUNT(*) FROM enquiries WHERE seen=0')]];
     }
     if ($R('POST', 'admin/notifications/read')) {
         list($vis, $vp) = $notif_vis(current_user());
         q_exec("UPDATE notifications SET `read`=1 WHERE $vis", $vp); return [200, ['ok' => true]];
+    }
+    if ($R('POST', 'admin/notifications/(\d+)/read')) {   // opening one notification marks just that one as read (like a message app)
+        list($vis, $vp) = $notif_vis(current_user());
+        q_exec("UPDATE notifications SET `read`=1 WHERE id=? AND $vis", array_merge([(int)$m[1]], $vp));
+        return [200, ['ok' => true]];
     }
     if ($R('POST', 'admin/notifications/delete')) {   // remove unwanted notifications (only the ones this admin can see): ?mode = read | all | ids
         $me = current_user(); $d = $json(); $mode = str_val($d['mode'] ?? ''); $n = 0;
@@ -737,47 +739,28 @@ function handle_api($method, $route, $body)
             if (!is_numeric($sh[$k])) throw new ApiError(400, 'Shipping values must be numbers.');
             $s['shipping'][$k] = max(0, (int)$sh[$k]);
         }
-        $ib = is_array($pay['iban'] ?? null) ? $pay['iban'] : [];
-        foreach (['bankName', 'accountName', 'accountNumber', 'branch'] as $k) if (array_key_exists($k, $ib)) $s['payments']['iban'][$k] = clean($ib[$k], 100);
-        if (array_key_exists('enabled', $ib)) $s['payments']['iban']['enabled'] = (bool)$ib['enabled'];
-        if (array_key_exists('iban', $ib)) {
-            $v = strtoupper(preg_replace('/\s/', '', clean($ib['iban'], 40)));
-            if ($v !== '' && !iban_ok($v)) throw new ApiError(400, 'Invalid Qatar IBAN. It must be 29 characters starting with QA (e.g. QA58 DOHB 0000 1234 5678 90AB CDEF G) and pass the checksum.');
-            $s['payments']['iban']['iban'] = $v;
-        }
-        if (array_key_exists('swift', $ib)) {
-            $v = str_replace(' ', '', strtoupper(clean($ib['swift'], 11)));
-            if ($v !== '' && !preg_match('/^[A-Z]{4}QA[A-Z0-9]{2}([A-Z0-9]{3})?$/D', $v)) throw new ApiError(400, 'Invalid SWIFT/BIC for a Qatar bank (8 or 11 characters, e.g. XXXXQAQA).');
-            $s['payments']['iban']['swift'] = $v;
-        }
-        $fw = is_array($pay['fawran'] ?? null) ? $pay['fawran'] : [];
-        foreach (['accountName', 'bankName'] as $k) if (array_key_exists($k, $fw)) $s['payments']['fawran'][$k] = clean($fw[$k], 100);
-        if (array_key_exists('enabled', $fw)) $s['payments']['fawran']['enabled'] = (bool)$fw['enabled'];
-        if (array_key_exists('alias', $fw)) {
-            $v = str_replace(' ', '', clean($fw['alias'], 40));
-            if ($v !== '' && !(qa_mobile($v) || iban_ok($v))) throw new ApiError(400, 'Fawran alias must be a Qatar mobile number (8 digits) or a valid Qatar IBAN.');
-            $s['payments']['fawran']['alias'] = qa_mobile($v) ?: strtoupper($v);
-        }
-        $oo = is_array($pay['ooredoo'] ?? null) ? $pay['ooredoo'] : [];
-        if (array_key_exists('accountName', $oo)) $s['payments']['ooredoo']['accountName'] = clean($oo['accountName'], 100);
-        if (array_key_exists('enabled', $oo)) $s['payments']['ooredoo']['enabled'] = (bool)$oo['enabled'];
-        if (array_key_exists('number', $oo)) {
-            $v = clean($oo['number'], 20);
-            if ($v !== '' && !qa_mobile($v)) throw new ApiError(400, 'Ooredoo Money number must be a Qatar mobile number (8 digits).');
-            $s['payments']['ooredoo']['number'] = qa_mobile($v) ?: '';
-        }
         if (array_key_exists('google', $d)) {
             $gid = clean((is_array($d['google']) ? $d['google'] : [])['clientId'] ?? '', 200);
             if ($gid !== '' && !preg_match('/^[\w-]+\.apps\.googleusercontent\.com$/D', $gid)) throw new ApiError(400, 'Google Client ID looks wrong. It ends with .apps.googleusercontent.com');
             $s['google']['clientId'] = $gid;
         }
         $pemToWrite = null;
-        $cd = is_array($pay['card'] ?? null) ? $pay['card'] : [];           // card payments (hosted page of the payment provider)
-        if (array_key_exists('test', $cd)) $s['payments']['card']['test'] = (bool)$cd['test'];
-        if (!empty($cd['apiToken'])) $s['payments']['card']['apiToken'] = clean($cd['apiToken'], 300);   // blank = keep the saved token
-        if (array_key_exists('enabled', $cd)) $s['payments']['card']['enabled'] = (bool)$cd['enabled'];
-        if (!empty($s['payments']['card']['enabled']) && str_val($s['payments']['card']['apiToken']) === '')
-            throw new ApiError(400, 'Card payments cannot be switched on yet. Paste the API token from your payment provider first.');
+        $sc = is_array($pay['skipcash'] ?? null) ? $pay['skipcash'] : [];   // SkipCash keys (a blank secret keeps the saved one)
+        if (array_key_exists('test', $sc)) $s['payments']['skipcash']['test'] = (bool)$sc['test'];
+        foreach (['keyId' => 80, 'clientId' => 120] as $k => $mx) if (array_key_exists($k, $sc)) $s['payments']['skipcash'][$k] = clean($sc[$k], $mx);
+        foreach (['keySecret' => 200, 'webhookKey' => 200] as $k => $mx) if (!empty($sc[$k])) $s['payments']['skipcash'][$k] = clean($sc[$k], $mx);
+        if (array_key_exists('enabled', $sc)) $s['payments']['skipcash']['enabled'] = (bool)$sc['enabled'];
+        if (!empty($s['payments']['skipcash']['enabled']) && !skipcash_ready($s['payments']['skipcash']))
+            throw new ApiError(400, 'SkipCash cannot be switched on yet. Enter the Key ID, Key Secret and Client ID from the SkipCash merchant portal.');
+        $ml = is_array($d['mail'] ?? null) ? $d['mail'] : [];               // e-mail sending (for the password codes)
+        foreach (['host' => 120, 'user' => 120, 'from' => 120] as $k => $mx) if (array_key_exists($k, $ml)) $s['mail'][$k] = clean($ml[$k], $mx);
+        if (array_key_exists('port', $ml)) $s['mail']['port'] = max(1, min(65535, (int)$ml['port'] ?: 587));
+        if (array_key_exists('security', $ml)) {
+            if (!in_array($ml['security'], ['tls', 'ssl', 'none'], true)) throw new ApiError(400, 'Choose TLS, SSL or none for the mail connection.');
+            $s['mail']['security'] = $ml['security'];
+        }
+        if (!empty($ml['password'])) $s['mail']['password'] = clean($ml['password'], 200);   // blank = keep the saved one
+        if ($s['mail']['from'] !== '' && !valid_email($s['mail']['from'])) throw new ApiError(400, 'The "From" address must be an e-mail address (for example info@lofan.qa).');
         $en = is_array($d['enquiry'] ?? null) ? $d['enquiry'] : [];           // the reply text for enquiries
         if (array_key_exists('template', $en)) {
             $t = clean($en['template'], 900);
@@ -803,7 +786,6 @@ function handle_api($method, $route, $body)
         if (array_key_exists('shop', $d)) $s['shop']['autoDeleteSoldOut'] = !empty((is_array($d['shop']) ? $d['shop'] : [])['autoDeleteSoldOut']);
         if (array_key_exists('orders', $d) && is_array($d['orders'])) {
             $oi = $d['orders'];
-            if (array_key_exists('requireReceipt', $oi)) $s['orders']['requireReceipt'] = (bool)$oi['requireReceipt'];
             if (array_key_exists('unpaidHours', $oi)) {
                 if (!is_numeric($oi['unpaidHours']) || $oi['unpaidHours'] < 0 || $oi['unpaidHours'] > 720) throw new ApiError(400, 'Release unpaid orders after 0 to 720 hours (0 = never).');
                 $s['orders']['unpaidHours'] = (int)$oi['unpaidHours'];
@@ -904,6 +886,10 @@ function handle_api($method, $route, $body)
         if ($ch !== 'note' && $enq['status'] === 'New') q_exec("UPDATE enquiries SET status='Replied' WHERE id=?", [$eid]);
         log_admin('enquiry.reply', "Enquiry #$eid: " . ($ch === 'note' ? 'note added' : 'replied by ' . ($ch === 'sms' ? 'SMS' : 'WhatsApp')));
         return [200, ['enquiry' => $enq_out(q_one('SELECT * FROM enquiries WHERE id=?', [$eid]))]];
+    }
+    if ($R('POST', 'admin/enquiries/(\d+)/seen')) {   // the admin has opened this enquiry: the "new" badge goes away
+        q_exec('UPDATE enquiries SET seen=1 WHERE id=?', [(int)$m[1]]);
+        return [200, ['ok' => true]];
     }
     if ($R('PUT', 'admin/enquiries/(\d+)')) {
         $st = clean($json()['status'] ?? '', 20);
@@ -1112,6 +1098,18 @@ function handle_api($method, $route, $body)
         $n = reset_data($o);
         log_admin('reset', 'Data reset: ' . json_encode($n));
         return [200, ['ok' => true, 'deleted' => $n]];
+    }
+
+    /* ----- test the e-mail sending (owner only): one e-mail to the owner's address (or the address typed) ----- */
+    if ($R('POST', 'admin/mail/test')) {
+        $me = need_owner(); $d = $json();
+        $to = lower(clean($d['to'] ?? $me['email'], 120));
+        if (!valid_email($to)) throw new ApiError(400, 'Enter a valid e-mail address.');
+        if (!send_mail($to, 'Lofan – e-mail test', "This is a test e-mail from your Lofan website.\nIf you can read it, e-mail sending works.\n\nLofan Development & Trading")) {
+            throw new ApiError(502, $GLOBALS['MAIL_ERROR'] ?: 'The e-mail could not be sent.');
+        }
+        log_admin('mail.test', 'Test e-mail sent to ' . $to);
+        return [200, ['ok' => true, 'sentTo' => $to]];
     }
 
     /* ----- test the order alerts (owner only) ----- */

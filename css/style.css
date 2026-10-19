@@ -765,3 +765,39 @@ form input[type=file]{padding:12px 0;font-size:14px;border-bottom-style:dashed}
 .err-note{background:#f6e4cf;border-left:3px solid #c07a1d;text-align:left;margin-bottom:18px;max-width:none}
 .badge{vertical-align:middle}
 @media(max-width:800px){.enq-inbox .chat-body{min-height:240px;max-height:45vh}.enq-photos a{width:76px;height:76px}}
+/* ===== v13: cart bar + side cart panel, notification badges, SkipCash payment choice, forgot-password pop-ups ===== */
+.cart-bar{position:fixed;left:0;right:0;bottom:0;z-index:70;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 18px calc(12px + env(safe-area-inset-bottom,0px));background:var(--sage-dark);color:#f4efe7;box-shadow:0 -6px 22px rgba(0,0,0,.18)}
+.cart-bar[hidden]{display:none}
+.cb-info{display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.cb-info strong{font-weight:500;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
+.cb-info span{font-family:var(--serif);font-size:22px}
+.cb-btns{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.cart-bar .btn{padding:12px 18px;font-size:11px;letter-spacing:.18em;min-height:44px}
+.cart-bar .btn.ghost{color:#f4efe7;border-color:rgba(244,239,231,.7)}
+.cart-bar .btn.ghost:hover{background:#f4efe7;color:var(--sage-dark)}
+.cart-bar .btn:not(.ghost){background:#f4efe7;color:var(--sage-dark)}
+.cart-bar .btn:not(.ghost):hover{background:var(--cream-2)}
+body.has-cart-bar .chat-fab{bottom:88px}
+body.has-cart-bar .toast{bottom:96px}
+.cart-drawer{width:min(440px,100%)}
+.cart-drawer .drawer-foot .btn{width:100%}
+.cart-drawer .drawer-foot .sum-row.total strong{font-size:20px}
+.topbar button.on{opacity:.75}
+/* notifications: opened items lose their "New" tag */
+.notif{cursor:pointer;transition:background .2s}
+.notif:hover{background:#f7f3e9}
+.notif.unread{border-left:3px solid var(--sage);background:#f7f3e9}
+.new-pill{display:inline-block;margin-left:6px;padding:1px 7px;font-style:normal;font-size:10px;letter-spacing:.12em;text-transform:uppercase;background:#b04a3a;color:#fff;vertical-align:middle}
+/* forgot password / code pop-ups */
+.forgot-line{margin-top:12px}
+.forgot-line .ulink{font-size:13px}
+/* SkipCash / Apple Pay choice on the payment page */
+.pay-choice{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-bottom:26px}
+.pay-card{background:var(--cream-2);padding:24px 22px;display:flex;flex-direction:column;gap:12px}
+.pay-card h3{font-size:26px;margin:0}
+.pay-card .btn{margin-top:auto}
+.pay-card .apple-pay-btn{margin-top:6px}
+.pay-card .note{margin:0}
+/* the Settings section headings used for the online payment blocks */
+h4{font-size:22px}
+@media(max-width:700px){.cart-bar{padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px))}.cb-info span{font-size:19px}.cart-bar .btn{padding:11px 12px;font-size:10px;letter-spacing:.12em}}

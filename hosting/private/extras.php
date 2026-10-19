@@ -301,33 +301,69 @@ function describe_product_changes($row, $c)
 }
 
 /* ------------------------------------------------------------------ e-mail (password codes) */
-/* Sends a plain-text e-mail with PHP's mail() (your cPanel mail service). Set mail_capture in the test config to log instead. */
+/* Sends a plain-text e-mail. Uses the mailbox set in Admin > Company & Payments > E-mail sending (SMTP, recommended).
+   Without that, PHP's mail() is tried. Returns true when the server accepted it; otherwise $GLOBALS['MAIL_ERROR'] says why. */
 function send_mail($to, $subject, $text)
 {
-    if (!valid_email($to)) return false;
-    $cap = cfg()['mail_capture'] ?? null;
+    $GLOBALS['MAIL_ERROR'] = '';
+    if (!valid_email($to)) { $GLOBALS['MAIL_ERROR'] = 'The e-mail address is not valid.'; return false; }
+    $cap = cfg()['mail_capture'] ?? null;                              // test server only
     if ($cap) { @file_put_contents($cap, json_encode(['to' => $to, 'subject' => $subject, 'body' => $text], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND); return true; }
+    $mail = get_settings()['mail'];
     $co = get_settings()['company'];
     $host = explode(':', (string)($_SERVER['HTTP_HOST'] ?? 'lofan.qa'))[0];
+    if (trim((string)$mail['host']) !== '') {
+        $from = valid_email(str_val($mail['from'])) ? str_val($mail['from']) : (valid_email(str_val($mail['user'])) ? str_val($mail['user']) : '');
+        if ($from === '') { $GLOBALS['MAIL_ERROR'] = 'Enter the "From" e-mail address under Company & Payments > E-mail sending.'; return false; }
+        $ok = smtp_send($mail, $from, $to, $subject, $text, $host);
+        if (!$ok) error_log('Lofan SMTP: ' . $GLOBALS['MAIL_ERROR']);
+        return $ok;
+    }
     $from = (!empty($co['email']) && valid_email($co['email'])) ? $co['email'] : 'no-reply@' . $host;
     $headers = "From: Lofan <$from>\r\nReply-To: $from\r\nContent-Type: text/plain; charset=UTF-8\r\nX-Mailer: Lofan";
     $ok = @mail($to, '=?UTF-8?B?' . base64_encode($subject) . '?=', $text, $headers);
-    if (!$ok) error_log('Lofan: the e-mail to ' . $to . ' could not be handed to the mail service.');
+    if (!$ok) $GLOBALS['MAIL_ERROR'] = 'This server could not send e-mail. Set up your mailbox under Company & Payments > E-mail sending (SMTP), then press "Send test e-mail".';
     return (bool)$ok;
+}
+/* One message through an SMTP mailbox (for example the mailbox you create in cPanel > Email Accounts). */
+function smtp_send($m, $from, $to, $subject, $text, $host)
+{
+    $sec = in_array($m['security'] ?? 'tls', ['tls', 'ssl', 'none'], true) ? $m['security'] : 'tls';
+    $port = (int)($m['port'] ?: ($sec === 'ssl' ? 465 : 587));
+    $msg = "From: Lofan <$from>\r\nTo: <$to>\r\nSubject: =?UTF-8?B?" . base64_encode($subject) . "?=\r\nDate: " . date('r')
+        . "\r\nMessage-ID: <" . bin2hex(random_bytes(12)) . '@' . $host . ">\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n"
+        . str_replace(["\r\n", "\n"], "\r\n", $text) . "\r\n";
+    $fh = fopen('php://temp', 'r+'); fwrite($fh, $msg); rewind($fh);
+    $ch = curl_init(($sec === 'ssl' ? 'smtps' : 'smtp') . '://' . trim($m['host']) . ':' . $port);
+    $opts = [CURLOPT_USERNAME => (string)$m['user'], CURLOPT_PASSWORD => (string)$m['password'], CURLOPT_MAIL_FROM => '<' . $from . '>',
+        CURLOPT_MAIL_RCPT => ['<' . $to . '>'], CURLOPT_UPLOAD => true, CURLOPT_INFILE => $fh, CURLOPT_INFILESIZE => strlen($msg),
+        CURLOPT_TIMEOUT => 30, CURLOPT_CONNECTTIMEOUT => 12, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2];
+    if ($sec === 'tls') $opts[CURLOPT_USE_SSL] = CURLUSESSL_ALL;        // STARTTLS: the connection must upgrade to encrypted or it fails
+    curl_setopt_array($ch, $opts);
+    $res = curl_exec($ch);
+    $err = curl_error($ch);
+    curl_close($ch); fclose($fh);
+    if ($res === false) { $GLOBALS['MAIL_ERROR'] = 'The mail server could not be reached or refused the login (' . ($err ?: 'unknown error') . '). Check host, port, user and password under E-mail sending.'; return false; }
+    return true;
 }
 
 /* ------------------------------------------------------------------ password reset by e-mail code (admins and staff) */
 const OTP_MINUTES = 10;
-/* Creates a 6-digit code, stores only its hash, and e-mails it to the admin's login address. Returns true when sent. */
+/* Creates a 6-digit code (only its hash is stored) and e-mails it to the account's login address.
+   Returns ['ok' => bool, 'reason' => why not, 'devCode' => the code, ONLY on a local test PC]. */
 function otp_issue($u)
 {
-    if ((int)q_val('SELECT COUNT(*) FROM password_otps WHERE user_id=? AND created>?', [(int)$u['id'], now() - 900]) >= 3) return false;   // at most 3 codes per 15 minutes
+    if ((int)q_val('SELECT COUNT(*) FROM password_otps WHERE user_id=? AND created>?', [(int)$u['id'], now() - 900]) >= 3)
+        return ['ok' => false, 'reason' => 'You asked for several codes in the last 15 minutes. Please wait a few minutes and try again.'];
     $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     q_exec('UPDATE password_otps SET used=1 WHERE user_id=? AND used=0', [(int)$u['id']]);
     q_exec('INSERT INTO password_otps(user_id,code_hash,expires,attempts,used,created) VALUES(?,?,?,?,?,?)',
         [(int)$u['id'], password_hash($code, PASSWORD_DEFAULT), now() + OTP_MINUTES * 60, 0, 0, now()]);
-    return send_mail($u['email'], 'Lofan – your password reset code',
-        "Hello " . $u['name'] . ",\n\nYour code to reset your Lofan admin password is:\n\n    " . $code . "\n\nIt is valid for " . OTP_MINUTES . " minutes and can be used once.\nIf you did not ask for this, ignore this e-mail – your password stays the same.\n\nLofan Development & Trading");
+    $sent = send_mail($u['email'], 'Lofan – your password reset code',
+        'Hello ' . $u['name'] . ",\n\nYour code to reset your Lofan password is:\n\n    " . $code . "\n\nIt is valid for " . OTP_MINUTES . " minutes and can be used once.\nIf you did not ask for this, ignore this e-mail – your password stays the same.\n\nLofan Development & Trading");
+    $res = ['ok' => $sent, 'reason' => $sent ? '' : (string)($GLOBALS['MAIL_ERROR'] ?? '')];
+    if (!$sent && !empty(cfg()['dev_show_codes'])) $res['devCode'] = $code;   // local test PC only: config.php is never uploaded
+    return $res;
 }
 /* Checks a code. Returns true only for the newest unused, unexpired code. A used code cannot be used again. */
 function otp_accept($u, $code)
@@ -391,30 +427,78 @@ function enquiry_reply_text($enq)
     return slice(trim($txt), 900);
 }
 
-/* ------------------------------------------------------------------ card payments: MyFatoorah hosted payment page */
-/* Base web address of the live server, used for the "come back after paying" links. */
+/* ------------------------------------------------------------------ online payments: SkipCash (hosted payment page) */
+/* Base web address of the live server, used for the "come back after paying" and webhook links. */
 function site_base_url()
 {
     return (is_https() ? 'https' : 'http') . '://' . (string)($_SERVER['HTTP_HOST'] ?? 'lofan.qa');
 }
-function mf_base($test)
+/* SkipCash can be used once its three keys are entered (the Key ID, Key Secret and Client ID from the merchant portal). */
+function skipcash_ready($s)
+{
+    return !empty($s['enabled']) && trim((string)($s['keyId'] ?? '')) !== '' && trim((string)($s['keySecret'] ?? '')) !== '' && trim((string)($s['clientId'] ?? '')) !== '';
+}
+function skipcash_base($test)
 {
     $c = cfg();
-    if (!empty($c['myfatoorah_base'])) return rtrim((string)$c['myfatoorah_base'], '/');     // test server only
-    return $test ? 'https://apitest.myfatoorah.com' : 'https://api.myfatoorah.com';
+    if (!empty($c['skipcash_base'])) return rtrim((string)$c['skipcash_base'], '/');     // local test server only
+    return $test ? 'https://skipcashtest.azurewebsites.net' : 'https://api.skipcash.app';
 }
-/* One call to the provider. Returns the Data object, or throws a friendly error (details go to the server log). */
-function mf_call($path, $token, $payload)
+/* Signature for creating a payment: HMAC-SHA256 of "Field=value,Field=value,..." (empty fields left out), base64 encoded. */
+function skipcash_signature($secret, $fields)
 {
-    $cfg = get_settings()['payments']['card'];
-    list($body, $code, $err) = http_json(mf_base(!empty($cfg['test'])) . $path, $payload, ['Authorization: Bearer ' . $token], [], 25);
-    if (is_string($body)) $body = preg_replace('/^\xEF\xBB\xBF/', '', $body);   // some servers start the answer with an invisible byte-order mark
-    $j = is_string($body) ? json_decode($body, true) : null;
-    if (!is_array($j) || empty($j['IsSuccess'])) {
-        error_log('MyFatoorah ' . $path . ' failed (HTTP ' . $code . ' ' . $err . '): ' . slice((string)$body, 400));
-        throw new ApiError(502, 'The card payment page could not be opened. Please choose another payment method or try again.');
+    $parts = [];
+    foreach ($fields as $k => $v) if ((string)$v !== '') $parts[] = $k . '=' . $v;
+    return base64_encode(hash_hmac('sha256', implode(',', $parts), (string)$secret, true));
+}
+function skipcash_uuid()
+{
+    $b = random_bytes(16); $b[6] = chr(ord($b[6]) & 0x0f | 0x40); $b[8] = chr(ord($b[8]) & 0x3f | 0x80);
+    return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($b), 4));
+}
+/* Creates the payment and returns SkipCash's answer (its payment id and the page to send the customer to). */
+function skipcash_create($s, $oid, $total, $first, $last, $phone, $email, $returnUrl, $notifyUrl)
+{
+    $f = ['Uid' => skipcash_uuid(), 'KeyId' => trim($s['keyId']), 'Amount' => number_format((float)$total, 2, '.', ''), 'FirstName' => $first,
+        'LastName' => $last, 'Phone' => $phone, 'Email' => $email, 'TransactionId' => $oid, 'Custom1' => $oid];
+    $body = $f + ['ReturnUrl' => $returnUrl, 'WebhookUrl' => $notifyUrl];
+    $sig = skipcash_signature($s['keySecret'], $f);
+    list($res, $code, $err) = http_json(skipcash_base(!empty($s['test'])) . '/api/v1/payments', $body, ['Authorization: ' . $sig], [], 25);
+    if (is_string($res)) $res = preg_replace('/^\xEF\xBB\xBF/', '', $res);
+    $j = is_string($res) ? json_decode($res, true) : null;
+    $r = is_array($j) ? ($j['resultObj'] ?? null) : null;
+    if (!is_array($r) || empty($r['payUrl']) || !empty($j['hasError'])) {
+        error_log('SkipCash create failed (HTTP ' . $code . ' ' . $err . '): ' . slice((string)$res, 400));
+        throw new ApiError(502, 'The SkipCash payment page could not be opened. Please try again in a moment.');
     }
-    return is_array($j['Data'] ?? null) ? $j['Data'] : [];
+    return $r;
+}
+/* Asks SkipCash directly what happened to a payment (authoritative: we do not trust a web address alone). */
+function skipcash_status($s, $paymentId)
+{
+    list($res, $code, $err) = http_json(skipcash_base(!empty($s['test'])) . '/api/v1/payments/' . rawurlencode((string)$paymentId), null, ['Authorization: ' . trim($s['clientId'])], [], 20);
+    if (is_string($res)) $res = preg_replace('/^\xEF\xBB\xBF/', '', $res);
+    $j = is_string($res) ? json_decode($res, true) : null;
+    if (!is_array($j)) { error_log('SkipCash status failed (HTTP ' . $code . ' ' . $err . '): ' . slice((string)$res, 300)); return null; }
+    $r = is_array($j['resultObj'] ?? null) ? $j['resultObj'] : $j;
+    return $r;
+}
+function skipcash_is_paid($r)
+{
+    return is_array($r) && ((int)($r['statusId'] ?? -1) === 2 || strtolower((string)($r['status'] ?? '')) === 'paid');
+}
+/* Marks an order as paid after SkipCash confirmed it. Returns true only the first time (no double confirmation). */
+function confirm_online_payment($oid, $method, $ref, $note)
+{
+    $r = order_by_id($oid);
+    if (!$r) return false;
+    $n = q_exec("UPDATE orders SET status='Payment confirmed', method=?, txn=? WHERE id=? AND status='Awaiting payment'", [$method, $ref, $oid]);
+    if (!$n) return false;
+    add_event($oid, 'Payment confirmed', $note);
+    $dn = (json_decode($r['delivery'], true) ?: [])['name'] ?? '';
+    notify('payment', "Online payment received – $oid", "$dn paid " . (int)$r['total'] . ' ' . CURRENCY . ' by ' . $method . '. Already confirmed.', $oid);
+    queue_alert('confirmed', $oid);
+    return true;
 }
 
 /* ------------------------------------------------------------------ automatic chat replies */

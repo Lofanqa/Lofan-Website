@@ -88,6 +88,10 @@ function ensureModal() {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') Modal.close(); });
   $('#modalBody').addEventListener('click', e => {
     const v = e.target.closest('button[data-auth-view]'); if (v) renderAuth(v.dataset.authView);
+    if (e.target.closest('[data-forgot]')) {                   // "Forgot password?" – keep the e-mail that was typed, if any
+      const typed = (($('input[name=id]', $('#modalBody'))) || {}).value || '';
+      forgotView(/@/.test(typed) ? typed : '');
+    }
   });
   $('#modalBody').addEventListener('submit', onAuthSubmit);
 }
@@ -143,6 +147,31 @@ function bindPwRules(form, field = 'password') {   // live tick-list under the p
   input.addEventListener('input', paint); paint();
 }
 function openAuth(view = 'login', opts = {}) { authOpts = opts; renderAuth(view); }
+/* Forgot password: step 1 asks for the account's e-mail; step 2 (forgotCode) asks for the code and a new password. */
+function forgotView(prefill = '') {
+  Modal.open(`<h2>Reset your <em>password</em></h2>
+    <p class="gate-note">Enter the e-mail address of your account. We will send a 6-digit code to it.</p>
+    <form data-auth-form="forgot" novalidate>
+      <label>Email<input type="email" name="email" value="${esc(prefill)}" autocomplete="email" required></label>
+      <button class="btn full" type="submit">Send me a code</button><p class="note" data-note></p>
+    </form>
+    <button type="button" class="btn ghost full" data-auth-view="login">Back to sign in</button>`);
+  setTimeout(() => { const f = $('#modalBody input'); if (f) f.focus(); }, 60);
+}
+function forgotCode(email, message, devCode) {
+  Modal.open(`<h2>Enter the <em>code</em></h2>
+    <p class="gate-note">${esc(message || 'We sent a 6-digit code to your e-mail.')}</p>
+    ${devCode ? `<p class="note">Test mode – your code is <strong>${esc(devCode)}</strong></p>` : ''}
+    <form data-auth-form="resetcode" novalidate>
+      <input type="hidden" name="email" value="${esc(email)}">
+      <label>6-digit code<input name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></label>
+      <label>New password (8+ characters, letters and numbers)<input type="password" name="password" autocomplete="new-password" required></label>
+      <label>Confirm new password<input type="password" name="confirm" autocomplete="new-password" required></label>
+      <button class="btn full" type="submit">Set new password</button><p class="note" data-note></p>
+    </form>
+    <button type="button" class="btn ghost full" data-auth-view="login">Back to sign in</button>`);
+  setTimeout(() => { const f = $('#modalBody input[name=code]'); if (f) f.focus(); }, 60);
+}
 function renderAuth(view) {
   const reg = view === 'register';
   Modal.open(`
@@ -162,6 +191,7 @@ function renderAuth(view) {
       <label>Email or mobile number<input name="id" autocomplete="username" required></label>
       <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn full" type="submit">Sign In</button><p class="note" data-note></p>
+      <p class="small center forgot-line"><button type="button" class="ulink" data-forgot>Forgot password?</button></p>
     </form>`}
     ${state.googleId ? '<div class="or"><span>or</span></div><div id="gBtn" class="gbtn"></div>' : ''}`);
   setTimeout(() => { const f = $('#modalBody input'); if (f) f.focus(); }, 60);
@@ -246,6 +276,15 @@ async function onAuthSubmit(e) {
   }
   const btn = $('button[type=submit]', f); btn.disabled = true;
   try {
+    if (kind === 'forgot') {                                   // step 1: a 6-digit code goes to the account's e-mail
+      const r = await api('/auth/otp/request', { method: 'POST', body: { email: d.email } });
+      forgotCode(d.email, r.message, r.devCode); return;
+    }
+    if (kind === 'resetcode') {                                // step 2: the code and the new password
+      if (d.password !== d.confirm) return fail('Passwords do not match.', 'confirm');
+      await api('/auth/otp/confirm', { method: 'POST', body: { email: d.email, code: d.code, password: d.password } });
+      toast('Password changed – please sign in with your new password'); openAuth('login'); return;
+    }
     if (kind === 'phone') {
       const u = state.user;
       const r = await api('/me', { method: 'PUT', body: { name: u.name, email: u.email, address: u.address, phone: d.phone } });

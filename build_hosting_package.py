@@ -52,10 +52,11 @@ def export_seed():
         st['google'] = {'clientId': ''}
         al = st.get('alerts') or {}                                   # never export WhatsApp / Telegram secrets
         al.pop('sms', None)                                           # SMS / Twilio alerts were removed
-        pay = st.get('payments') or {}                                # card-payment token must never leave this PC in a package
-        if isinstance(pay.get('card'), dict): pay['card'].update({'apiToken': '', 'enabled': False})
         if isinstance(al.get('whatsapp'), dict): al['whatsapp'].update({'apiKey': '', 'enabled': False})
         if isinstance(al.get('telegram'), dict): al['telegram'].update({'botToken': '', 'enabled': False})
+        # SkipCash keys and the mailbox password never leave this PC in a package; the owner enters them on the live site.
+        st['payments'] = {'skipcash': {'enabled': False, 'test': True, 'keyId': '', 'keySecret': '', 'clientId': '', 'webhookKey': ''}}
+        st['mail'] = {'host': '', 'port': 587, 'security': 'tls', 'user': '', 'password': '', 'from': ''}
         seed['settings'] = st
     if FULL:
         for t in ('users', 'orders', 'order_events', 'messages', 'notifications', 'enquiries'):
@@ -99,7 +100,7 @@ def stage():
             shutil.copy2(src, STAGE)
     os.makedirs(os.path.join(STAGE, 'images', 'products'), exist_ok=True)
     shutil.copy2(os.path.join(HOSTING, 'images-products.htaccess'), os.path.join(STAGE, 'images', 'products', '.htaccess'))
-    for d in ('receipts', 'applepay', 'throttle'):          # empty folders the server writes to (never ship local test files)
+    for d in ('receipts', 'applepay', 'throttle', 'enquiry-images'):   # empty folders the server writes to (never ship local test files or customer photos)
         shutil.rmtree(os.path.join(STAGE, 'private', d), ignore_errors=True)
         os.makedirs(os.path.join(STAGE, 'private', d), exist_ok=True)
         open(os.path.join(STAGE, 'private', d, 'index.html'), 'w').close()

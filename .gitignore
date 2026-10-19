@@ -17,6 +17,7 @@ hosting/private/force_https.flag
 hosting/private/receipts/*
 hosting/private/applepay/*
 hosting/private/throttle/*
+hosting/private/enquiry-images/*
 
 # Editor / OS
 .vscode/settings.json

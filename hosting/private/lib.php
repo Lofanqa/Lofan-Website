@@ -112,7 +112,7 @@ function schema_statements($driver)
         "CREATE TABLE IF NOT EXISTS notifications(id $pk, kind VARCHAR(20), title VARCHAR(300), body TEXT, ref VARCHAR(100), created BIGINT, `read` INT DEFAULT 0,
             to_user INT, owners_only INT DEFAULT 0)$tail",
         "CREATE TABLE IF NOT EXISTS enquiries(id $pk, name VARCHAR(120), company VARCHAR(160), email VARCHAR(190), phone VARCHAR(50), type VARCHAR(100),
-            qty VARCHAR(100), message TEXT, created BIGINT, status VARCHAR(20) DEFAULT 'New', images TEXT)$tail",
+            qty VARCHAR(100), message TEXT, created BIGINT, status VARCHAR(20) DEFAULT 'New', images TEXT, seen INT DEFAULT 0)$tail",
         "CREATE TABLE IF NOT EXISTS enquiry_msgs(id $pk, enquiry_id INT, sender VARCHAR(12), channel VARCHAR(12), body TEXT, by_name VARCHAR(120),
             created BIGINT" . $k('em_enq (enquiry_id)') . ")$tail",
         "CREATE TABLE IF NOT EXISTS approvals(id $pk, kind VARCHAR(20), ref VARCHAR(40), title VARCHAR(300), detail TEXT, status VARCHAR(12),
@@ -124,7 +124,7 @@ function schema_statements($driver)
     ];
 }
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 function exec_schema()
 {
@@ -161,12 +161,15 @@ function migrate()
         ['orders', 'del_decided_by', 'VARCHAR(120)'], ['orders', 'del_decided_at', 'BIGINT'], ['messages', 'auto', 'INT DEFAULT 0'],
         ['products', 'images', 'TEXT'], ['products', 'size', "VARCHAR(80) DEFAULT ''"], ['products', 'includes', "VARCHAR(200) DEFAULT ''"],
         ['products', 'req_json', 'TEXT'], ['products', 'req_by', 'VARCHAR(120)'], ['products', 'req_at', 'BIGINT'],
-        ['enquiries', 'images', 'TEXT'], ['notifications', 'to_user', 'INT'], ['notifications', 'owners_only', 'INT DEFAULT 0']];
+        ['enquiries', 'images', 'TEXT'], ['notifications', 'to_user', 'INT'], ['notifications', 'owners_only', 'INT DEFAULT 0'],
+        ['enquiries', 'seen', 'INT DEFAULT 0']];
+    $seenNew = !column_exists('enquiries', 'seen');
     foreach ($add as $a) {
         if (!column_exists($a[0], $a[1])) {
             try { db()->exec("ALTER TABLE {$a[0]} ADD COLUMN {$a[1]} {$a[2]}"); } catch (Throwable $e) { /* another request did it first */ }
         }
     }
+    if ($seenNew) q_exec('UPDATE enquiries SET seen=1');             // enquiries received before this update are not "new"
     q_exec("UPDATE users SET admin_level='owner' WHERE role='admin' AND (admin_level IS NULL OR admin_level='')");   // existing admin becomes the owner
     $st = q_one("SELECT value FROM settings WHERE `key`='settings'");   // SMS / Twilio alerts were replaced by WhatsApp: forget the old keys
     if ($st) {
@@ -224,9 +227,11 @@ function default_settings()
         'google' => ['clientId' => ''],
         'shop' => ['autoDeleteSoldOut' => false],
         // an order is only CONFIRMED after the payment is verified; unpaid orders are released after unpaidHours (0 = never)
-        'orders' => ['requireReceipt' => true, 'unpaidHours' => 24],
+        'orders' => ['unpaidHours' => 24],
         // Text of the WhatsApp / SMS reply to an enquiry. {name} = customer's first name, {topic} = what they asked about. Owner can change it.
         'enquiry' => ['template' => "Welcome to Lofan for your home accessories! 🏡✨\nThank you {name}, we have received your enquiry {topic} and we have started the process. We will make it as beautiful as you imagine.\nOur team will contact you shortly with the details. 🌿\n– Lofan Development & Trading"],
+        // E-mail sending (password codes). Leave the host empty to use the server's own mail service.
+        'mail' => ['host' => '', 'port' => 587, 'security' => 'tls', 'user' => '', 'password' => '', 'from' => ''],
         // Automatic replies in the website chat. EDIT THE DEFAULT TEXTS HERE (they can also be changed in Admin > Company & Payments).
         'chat' => [
             'autoReply' => true,
@@ -242,12 +247,8 @@ function default_settings()
         'applepay' => ['enabled' => false, 'merchantId' => '', 'displayName' => 'Lofan', 'domain' => '', 'sandbox' => true,
             'publicKey' => '', 'secretKey' => '', 'domainFile' => ''],
         'payments' => [
-            'iban' => ['enabled' => true, 'bankName' => '', 'accountName' => 'Lofan Development & Trading', 'accountNumber' => '',
-                'iban' => '', 'swift' => '', 'branch' => 'Doha, Qatar'],
-            'fawran' => ['enabled' => true, 'alias' => '66404222', 'accountName' => 'Lofan Development & Trading', 'bankName' => ''],
-            'ooredoo' => ['enabled' => true, 'number' => '66404222', 'accountName' => 'Lofan Development & Trading'],
-            // Card payments run on the payment provider's own secure page (MyFatoorah). Card numbers never touch this website.
-            'card' => ['enabled' => false, 'apiToken' => '', 'test' => true],
+            // SkipCash: customers are sent to SkipCash's secure payment page. Keys come from the SkipCash merchant portal.
+            'skipcash' => ['enabled' => false, 'test' => true, 'keyId' => '', 'keySecret' => '', 'clientId' => '', 'webhookKey' => ''],
         ],
     ];
 }
@@ -324,25 +325,6 @@ function norm_phone($p)
 }
 function valid_phone($p) { return (bool)preg_match('/^\d{10,15}$/D', norm_phone($p)); }
 function valid_email($e) { return (bool)preg_match('/^[^@\s]+@[^@\s]+\.[^@\s]+$/D', str_val($e)); }
-function iban_ok($s)
-{
-    $s = strtoupper(preg_replace('/\s/', '', str_val($s)));
-    if (!preg_match('/^QA\d{2}[A-Z]{4}[A-Z0-9]{21}$/D', $s)) return false;
-    $r = substr($s, 4) . substr($s, 0, 4);
-    $rem = 0;
-    for ($i = 0, $n = strlen($r); $i < $n; $i++) {
-        $v = base_convert($r[$i], 36, 10);               // digits stay, letters become 10..35
-        $rem = ((int)$v >= 10 ? $rem * 100 + (int)$v : $rem * 10 + (int)$v) % 97;
-    }
-    return $rem === 1;
-}
-function qa_mobile($s)
-{
-    $d = preg_replace('/\D/', '', str_val($s));
-    if (strpos($d, '974') === 0 && strlen($d) === 11) $d = substr($d, 3);
-    return preg_match('/^\d{8}$/D', $d) ? $d : null;
-}
-function group4($s) { return trim(chunk_split(preg_replace('/\s/', '', $s), 4, ' ')); }
 function valid_loc($lat, $lng)
 {
     if (!is_numeric($lat) || !is_numeric($lng)) return null;
@@ -548,8 +530,12 @@ function settings_for_admin($owner = true)
     $out['alerts']['whatsapp']['target'] = whatsapp_target($raw);                  // who really receives the alerts (shown in Admin)
     $out['alerts']['telegram']['hasToken'] = !empty($raw['alerts']['telegram']['botToken']);
     $out['alerts']['telegram']['botToken'] = '';
-    $out['payments']['card']['hasToken'] = str_val($raw['payments']['card']['apiToken'] ?? '') !== '';
-    $out['payments']['card']['apiToken'] = '';                       // the provider token is never sent back to the browser
+    foreach (['keySecret', 'webhookKey', 'clientId'] as $k) {         // secrets are never sent back to the browser
+        $out['payments']['skipcash']['has_' . $k] = str_val($raw['payments']['skipcash'][$k] ?? '') !== '';
+        $out['payments']['skipcash'][$k] = '';
+    }
+    $out['mail']['hasPassword'] = str_val($raw['mail']['password'] ?? '') !== '';
+    $out['mail']['password'] = '';
     $out['applepay']['hasSecret'] = !empty($raw['applepay']['secretKey']);
     $out['applepay']['secretKey'] = '';                             // never send secrets back to the browser
     $out['applepay']['hasIdentity'] = is_file(identity_pem());
@@ -560,39 +546,20 @@ function payment_info()
 {
     $s = get_settings();
     $p = $s['payments'];
+    /* Customers pay online only: Apple Pay and SkipCash. (The old bank-transfer / Fawran / Ooredoo options were removed.) */
     $methods = [];
-    $rows = function ($pairs) { $o = []; foreach ($pairs as $kv) if ((string)$kv[1] !== '') $o[] = [$kv[0], $kv[1]]; return $o; };
-    if (!empty($p['iban']['enabled']) && iban_ok($p['iban']['iban'])) {
-        $d = $p['iban'];
-        $methods[] = ['id' => 'iban', 'label' => 'Bank Transfer (IBAN)',
-            'hint' => 'Transfer the exact total in QAR from your Qatari bank app or branch to the account below. Write the payment reference in the transfer remarks / beneficiary note.',
-            'details' => $rows([['Bank', $d['bankName']], ['Account name', $d['accountName']], ['Account number', $d['accountNumber']],
-                ['IBAN', group4($d['iban'])], ['SWIFT / BIC', $d['swift']], ['Branch', $d['branch']], ['Currency', 'QAR – Qatari Riyal']])];
-    }
-    if (!empty($p['fawran']['enabled']) && $p['fawran']['alias']) {
-        $d = $p['fawran'];
-        $methods[] = ['id' => 'fawran', 'label' => 'Fawran (Instant)',
-            'hint' => 'Open your bank app, choose Fawran / instant payment, send to the alias below and add the payment reference as the note. Funds arrive within seconds.',
-            'details' => $rows([['Fawran alias (mobile / IBAN)', $d['alias']], ['Account name', $d['accountName']], ['Bank', $d['bankName']]])];
-    }
-    if (!empty($p['ooredoo']['enabled']) && $p['ooredoo']['number']) {
-        $d = $p['ooredoo'];
-        $methods[] = ['id' => 'ooredoo', 'label' => 'Ooredoo Money',
-            'hint' => 'Open the Ooredoo Money app, choose Send Money, enter the number below and add the payment reference as the note.',
-            'details' => $rows([['Ooredoo Money number', $d['number']], ['Account name', $d['accountName']]])];
-    }
     $ap = $s['applepay'];
     if (!empty($ap['enabled']) && !applepay_missing($ap)) {
         $methods[] = ['id' => 'applepay', 'label' => 'Apple Pay', 'wallet' => true,
             'hint' => 'Pay securely with Face ID / Touch ID using a card in your Apple Wallet. Your order is confirmed instantly.',
             'details' => [], 'applepay' => ['displayName' => $ap['displayName'] ?: 'Lofan', 'countryCode' => 'QA', 'currencyCode' => CURRENCY]];
     }
-    if (!empty($p['card']['enabled']) && str_val($p['card']['apiToken']) !== '') {
-        $methods[] = ['id' => 'card', 'label' => 'Bank card (secure online)', 'card' => true,
-            'hint' => 'You will be taken to the secure payment page of our payment provider to enter your card. Your card details are never entered on this website. Your order is confirmed as soon as the payment is approved.',
+    if (skipcash_ready($p['skipcash'] ?? [])) {
+        $methods[] = ['id' => 'skipcash', 'label' => 'SkipCash', 'redirect' => true,
+            'hint' => 'You will be taken to the secure SkipCash payment page to pay with your card or SkipCash wallet. Your order is confirmed as soon as the payment is approved.',
             'details' => []];
     }
-    return ['company' => $s['company'], 'currency' => CURRENCY, 'methods' => $methods, 'requireReceipt' => !empty($s['orders']['requireReceipt'])];
+    return ['company' => $s['company'], 'currency' => CURRENCY, 'methods' => $methods];
 }
 
 function http_json($url, $payload = null, $headers = [], $opts = [], $timeout = 20)

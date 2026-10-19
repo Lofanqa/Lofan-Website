@@ -102,7 +102,7 @@ a{color:#4b5030}code{background:#ebe4d7;padding:1px 6px}
     <strong>Next steps</strong>
     <ol style="font:15px/1.7 Arial,sans-serif">
       <li>Open <a href="admin.html"><b>admin.html</b></a> and create your <b>admin account</b> (the first visit shows "Create the admin account").</li>
-      <li>Admin &rarr; Company &amp; Payments: enter your real bank / IBAN, Fawran and Ooredoo Money details.</li>
+      <li>Admin &rarr; Company &amp; Payments: enter your SkipCash keys (and Apple Pay details when ready), and your mailbox for password-reset e-mails.</li>
       <li>Open the <a href="index.html">website</a> and place a test order as a customer.</li>
       <?php if (!$selfDeleted): ?><li class="bad"><b>Delete <code>install.php</code></b> from the server now (cPanel &rarr; File Manager) – the installer could not delete itself.</li><?php else: ?><li class="ok">The installer deleted itself for safety.</li><?php endif; ?>
     </ol>
