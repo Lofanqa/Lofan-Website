@@ -71,16 +71,20 @@ AFTER A PAYMENT
 
 ADD / UPDATE STOCK  (Admin > Products & Stock)
   - "Add a new item": name, category, price, stock, description, size, set contents and ONE OR MORE photos
-    (choose several files at once, up to 8) -> Add item. In the shop the photos slide automatically every 3 seconds,
-    with arrows, dots and swipe on phones. The first photo is the main one (cart, orders).
+    (choose as many files as you like) -> Add item. The photos are uploaded one at a time, so there is no limit on
+    how many photos an item has; the only limit is the storage space of your hosting (cPanel > File Manager shows it).
+    Each photo can be up to 4 MB; the admin shrinks photos to about 1400 px before uploading. In the shop the photos
+    slide automatically every 3 seconds, with arrows, dots and swipe on phones. The first photo is the main one.
+  - There is no limit on how many products you can create.
   - "Edit" on an item: change name, price, description, size, set contents; add / remove / re-order photos
     (the first photo is the main one).
   - Stock can be changed directly in the table; stock 0 shows "Sold out".
   - Untick "Show in shop" to hide an item. Stock drops automatically when orders are placed.
-  - WHO MAY CHANGE WHAT: the OWNER changes price, description, photos and other details directly. STAFF can change
-    stock and hide an item; for price / description / size / photos they press Edit > "Send for owner approval".
-    The owner sees "Item changes waiting for your approval" at the top of Products & Stock with Approve / Reject
-    (a notification pops up too). A new item added by staff stays hidden until the owner approves it.
+  - OWNER AND STAFF change products directly, with no approval: name, category, price, stock, description, size, set
+    contents, photos and "show in shop". Edit an item and press "Save changes".
+  - WAITING FOR THE OWNER (Products & Stock, at the top): when staff add a NEW item, or ask to delete an item forever,
+    the owner sees it there with "Approve" and "Reject" buttons. Approve a new item = it goes into the shop; reject it =
+    it is discarded. Approve a deletion = the item is deleted forever; reject = it stays.
   - Product boxes in the shop are square (the products are 30 x 30 cm). Each collection also shows its size and what
     the set includes.
   - The six collections from "Lofan 1.pdf" (Blue Blossom, Butterfly Bliss, Grape, Spring Garden, Blue Crane,
@@ -169,8 +173,8 @@ PASSWORD RESET CODES (E-MAIL)  (Admin > Company & Payments > E-mail sending)
   - If nothing arrives, check the spam folder, then the mailbox settings above. The page shows the reason when sending fails.
 
 SECURITY AND APPROVALS (owner / staff)
-  - Owner: all settings, security, activity log and approvals. Staff: their own security page only; their requests for
-    price / description / deletion changes are approved by the owner (see Notifications > Approvals).
+  - Owner: all settings, security, activity log and approvals. Staff: their own security page only. Staff can change products
+    directly; their requests to delete an item forever, and to delete an order, are approved by the owner (see Notifications > Approvals).
 
 SIGNING IN AND OUT
   - While somebody is signed in, the top bar shows "Hi, <name>" and a "Log out" button on every page (admins see "Admin").
@@ -210,6 +214,24 @@ CART POP-UP, PRODUCT DETAILS, ACCOUNT CHECKS
   - Clicking a product opens its details: photo, price, description and availability (In stock / Only N left / Sold out).
   - Sign-up refuses an email or mobile number that already has an account and says which one is taken
     (+974 / spaces / 00974 are treated as the same number; email ignores capital letters).
+
+ENGLISH / ARABIC  (العربية)
+  - The website has an "العربية" button in the top bar (and "English" to switch back). The choice is remembered on that device.
+  - The Arabic pages are right-to-left, use the Cairo font, and the prices show "ر.ق".
+  - The translations are in js/i18n.js (the AR list: English text on the left, Arabic on the right). Add a line there to
+    translate new text. Text that is not listed stays English, so nothing breaks.
+  - The admin dashboard stays in English.
+  - Product names and descriptions are entered in the Admin in English. The 20 catalogue names already listed in
+    js/i18n.js are translated; new products stay English in Arabic until Arabic product fields are added to the Admin.
+
+CUSTOMER INVOICES  (My Account > My Orders)
+  - Once a payment is confirmed, the order shows "Download invoice": it opens the invoice (logo, billed to, items, total,
+    payment information) in a new window, ready to print or save as PDF. The admin's "Print invoice" uses the same layout.
+
+ANIMATIONS
+  - Soft fade-in as sections scroll into view, a gentle zoom on the hero photo, a dashed "stitch" line under the section
+    headings, and a light shine on buttons. They use the same sage and cream colours. Turned off automatically for
+    visitors who ask their device for less motion.
 
 GOOGLE SIGN-IN / SIGN-UP  (needs your own free Google Client ID – about 5 minutes)
   1. Go to https://console.cloud.google.com and create/select a project.

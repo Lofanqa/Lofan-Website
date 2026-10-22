@@ -58,7 +58,7 @@ const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ
 const stem = w => (w.length > 3 ? w.replace(/(ies|es|s)$/, m => (m === 'ies' ? 'y' : '')) : w);
 function searchWords() { return norm(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean); }
 function productMatches(p, words) {
-  const hay = norm(p.name + ' ' + (CATS[p.cat] || '') + ' ' + (p.desc || ''));
+  const hay = norm(p.name + ' ' + tr(p.name) + ' ' + (CATS[p.cat] || '') + ' ' + tr(CATS[p.cat] || '') + ' ' + (p.desc || ''));   // in Arabic, the Arabic names are searched too
   return words.every(w => hay.includes(w) || hay.includes(stem(w)));
 }
 function renderProducts() {
@@ -69,16 +69,17 @@ function renderProducts() {
       <div class="pic ${p.stock > 0 ? '' : 'sold'}" title="View details">${sliderHTML(photosOf(p), p.name)}<span class="pic-view">View details</span></div>
       <p class="cat-name">${esc(CATS[p.cat] || '')}</p>
       <h3>${esc(p.name)}</h3>
-      ${p.size ? `<p class="size-line">${esc(p.size)}${p.includes ? ' · set of ' + (p.includes.split(',').length) : ''}</p>` : ''}
+      ${p.size ? `<p class="size-line">${esc(p.size)}${p.includes ? ' · ' + esc(tr('set of {n}', { n: p.includes.split(',').length })) : ''}</p>` : ''}
       ${p.desc ? `<p class="desc">${esc(p.desc)}</p>` : ''}
-      <p class="price">${money(p.price)}${p.stock > 0 && p.stock <= 5 ? `<small class="low"> · only ${p.stock} left</small>` : ''}</p>
+      <p class="price">${money(p.price)}${p.stock > 0 && p.stock <= 5 ? `<small class="low"> · ${esc(tr('only {n} left', { n: p.stock }))}</small>` : ''}</p>
       ${p.stock > 0 ? `<button class="add" data-id="${p.id}">Add to Cart</button>` : '<button class="add" disabled>Sold out</button>'}
     </article>`).join('');
   $('#emptyMsg').hidden = list.length > 0;
-  $('#emptyQuery').textContent = query ? '“' + query + '”' : 'this category';
+  $('#emptyQuery').textContent = query ? '“' + query + '”' : tr('this category');
   $('#emptyClear').hidden = !query;
   const info = $('#searchInfo');
-  if (info) info.textContent = !words.length ? '' : list.length ? `${list.length} piece${list.length === 1 ? '' : 's'} found for “${query}”` : `No pieces found for “${query}”`;
+  if (info) info.textContent = !words.length ? '' : !list.length ? tr('No pieces found for “{q}”', { q: query })
+    : list.length === 1 ? tr('1 piece found for “{q}”', { q: query }) : tr('{n} pieces found for “{q}”', { n: list.length, q: query });
   const clr = $('#searchClear'); if (clr) clr.hidden = !query;
 }
 function setFilter(f) { filter = f; if (query) clearSearch(false); else { renderFilters(); renderProducts(); } }
@@ -96,7 +97,7 @@ function addToCart(id, qty = 1) {
   if (OFFLINE) { toast(IS_LOCAL ? 'Start the server (python server.py) to place orders.' : 'The shop is temporarily unavailable – please try again in a moment.'); return false; }
   const p = product(id), cart = Cart.get(), row = cart.find(i => i.id === id), have = row ? row.qty : 0;
   if (!p || p.stock <= 0) { toast('Sorry, this item is sold out.'); return false; }
-  if (have + qty > p.stock) { toast(`Only ${p.stock} available${have ? ` (you already have ${have} in your cart)` : ''}.`); return false; }
+  if (have + qty > p.stock) { toast(`${tr('Only {n} available', { n: p.stock })}${have ? ' ' + tr('(you already have {have} in your cart)', { have }) : ''}.`); return false; }
   row ? row.qty += qty : cart.push({ id, qty });
   Cart.set(cart); renderCart(); toast('Added to your cart ✓');
   return true;
@@ -106,7 +107,7 @@ function addToCart(id, qty = 1) {
 function showProduct(id) {
   const p = product(id); if (!p) return;
   const inCart = (Cart.get().find(i => i.id === id) || { qty: 0 }).qty, left = Math.max(0, p.stock - inCart);
-  const avail = p.stock <= 0 ? ['out', 'Sold out'] : p.stock <= 5 ? ['low', `Only ${p.stock} left – order soon`] : ['in', `In stock – ${p.stock} available`];
+  const avail = p.stock <= 0 ? ['out', tr('Sold out')] : p.stock <= 5 ? ['low', tr('Only {n} left – order soon', { n: p.stock })] : ['in', tr('In stock – {n} available', { n: p.stock })];
   Modal.open(`
     <div class="pd">
       <div class="pd-img">${sliderHTML(photosOf(p), p.name, 'big')}</div>
@@ -118,7 +119,7 @@ function showProduct(id) {
         ${p.includes ? `<p class="pd-meta"><strong>Set includes:</strong> ${esc(p.includes)}</p>` : ''}
         <p class="avail ${avail[0]}"><i></i>${avail[1]}</p>
         ${p.desc ? `<p class="pd-desc">${esc(p.desc)}</p>` : ''}
-        ${inCart ? `<p class="muted small">You already have ${inCart} in your cart.</p>` : ''}
+        ${inCart ? `<p class="muted small">${esc(tr('You already have {n} in your cart.', { n: inCart }))}</p>` : ''}
         ${left > 0 ? `<div class="pd-buy">
             <div class="qty"><button type="button" id="pdMinus" aria-label="Less">&minus;</button><span id="pdQty">1</span><button type="button" id="pdPlus" aria-label="More">+</button></div>
             <button class="btn" id="pdAdd">Add to Cart</button></div>`
@@ -128,7 +129,7 @@ function showProduct(id) {
   if (left > 0) {
     let q = 1; const set = n => { q = Math.max(1, Math.min(left, n)); $('#pdQty').textContent = q; };
     $('#pdMinus').addEventListener('click', () => set(q - 1));
-    $('#pdPlus').addEventListener('click', () => { if (q >= left) toast(`Only ${left} available.`); set(q + 1); });
+    $('#pdPlus').addEventListener('click', () => { if (q >= left) toast(tr('Only {n} available', { n: left }) + '.'); set(q + 1); });
     $('#pdAdd').addEventListener('click', () => { if (addToCart(id, q)) Modal.close(); });
   }
 }
@@ -160,7 +161,7 @@ function closeCartPanel() { if (!$('#cartDrawer')) return; $('#cartDrawer').clas
 function onCartQty(e) {                                                // + / − / Remove buttons in the cart (panel or section)
   const b = e.target.closest('button'); if (!b || !b.dataset.a) return;
   const id = +b.dataset.id, cart = Cart.get(), row = cart.find(i => i.id === id); if (!row) return;
-  if (b.dataset.a === 'inc') { if (row.qty >= stockOf(product(id))) return toast('Only ' + row.qty + ' in stock'); row.qty++; }
+  if (b.dataset.a === 'inc') { if (row.qty >= stockOf(product(id))) return toast(tr('Only {n} in stock', { n: row.qty })); row.qty++; }
   if (b.dataset.a === 'dec') row.qty--;
   Cart.set(b.dataset.a === 'rm' || row.qty < 1 ? cart.filter(i => i.id !== id) : cart);
   renderCart();
@@ -221,7 +222,7 @@ function renderCart() {
     <h3>Order summary</h3>
     <div class="sum-row"><span>Subtotal</span><span>${money(t.subtotal)}</span></div>
     <div class="sum-row"><span>Shipping</span><span>${t.shipping ? money(t.shipping) : 'Free'}</span></div>
-    ${t.shipping ? `<p class="ship">Add ${money(SHIPPING.freeFrom - t.subtotal)} more for free shipping.</p>` : ''}
+    ${t.shipping ? `<p class="ship">${esc(tr('Add {amount} more for free shipping.', { amount: money(SHIPPING.freeFrom - t.subtotal) }))}</p>` : ''}
     <div class="sum-row total"><span>Total</span><strong>${money(t.total)}</strong></div>
     <button class="btn full" data-checkout>Checkout <b>&rarr;</b></button>
     <p class="ship">An account is required to place an order.</p>` : '';
@@ -235,7 +236,7 @@ function renderCart() {
   $('#cartBar').hidden = !cart.length;
   document.body.classList.toggle('has-cart-bar', cart.length > 0);
   const n = cart.reduce((s, i) => s + i.qty, 0);
-  $('#cbCount').textContent = `${n} item${n === 1 ? '' : 's'}`;
+  $('#cbCount').textContent = n === 1 ? tr('1 item') : tr('{n} items', { n });
   $('#cbTotal').textContent = cart.length ? money(t.total) : '';
 }
 $('#cartList').addEventListener('click', onCartQty);
@@ -257,7 +258,7 @@ function showCheckoutPopup() {
   Modal.open(`
     <h2>Ready to <em>pay</em>?</h2>
     <p class="gate-note">Signed in as <strong>${esc(state.user.name)}</strong> · ${esc(state.user.phone)}</p>
-    <div class="pop-items">${cart.map(i => `<div class="sum-row"><span>${esc(product(i.id).name)} × ${i.qty}</span><span>${money(product(i.id).price * i.qty)}</span></div>`).join('')}
+    <div class="pop-items">${cart.map(i => `<div class="sum-row"><span>${esc(tr(product(i.id).name))} × ${i.qty}</span><span>${money(product(i.id).price * i.qty)}</span></div>`).join('')}
       <div class="sum-row"><span>Shipping</span><span>${t.shipping ? money(t.shipping) : 'Free'}</span></div>
       <div class="sum-row total"><span>Total</span><strong>${money(t.total)}</strong></div></div>
     <a class="btn full" href="payment.html">Continue to Payment <b>&rarr;</b></a>
@@ -283,7 +284,8 @@ function shrinkPhoto(file, max = 1400) {
 }
 $('#enqPhotos').addEventListener('change', e => {
   const n = e.target.files.length;
-  $('#enqCount').textContent = n > ENQ_MAX_PHOTOS ? `Please choose up to ${ENQ_MAX_PHOTOS} photos (you chose ${n}).` : n ? `${n} photo${n === 1 ? '' : 's'} chosen` : '';
+  $('#enqCount').textContent = n > ENQ_MAX_PHOTOS ? tr('Please choose up to {n} photos (you chose {m}).', { n: ENQ_MAX_PHOTOS, m: n })
+    : n ? (n === 1 ? tr('{n} photo chosen', { n }) : tr('{n} photos chosen', { n })) : '';
 });
 $('#enquiryForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -297,7 +299,7 @@ $('#enquiryForm').addEventListener('submit', async e => {
   Object.keys(checks).forEach(k => { f.elements[k].classList.toggle('invalid', !checks[k]); if (!checks[k]) ok = false; });
   if (!ok) { note.className = 'note err'; note.textContent = 'Please complete the fields marked * (name, email, mobile number and message).'; return; }
   const files = [...f.elements.photos.files];
-  if (files.length > ENQ_MAX_PHOTOS) { note.className = 'note err'; note.textContent = `Please choose up to ${ENQ_MAX_PHOTOS} reference photos.`; return; }
+  if (files.length > ENQ_MAX_PHOTOS) { note.className = 'note err'; note.textContent = tr('Please choose up to {n} reference photos.', { n: ENQ_MAX_PHOTOS }); return; }
   btn.disabled = true; note.className = 'note'; note.textContent = files.length ? 'Sending your enquiry and photos…' : 'Sending…';
   try {
     v.images = [];
@@ -314,6 +316,24 @@ $('#enquiryForm').addEventListener('submit', async e => {
 
 /* ---------- Start ---------- */
 $('#burger').addEventListener('click', () => $('.header').classList.toggle('menu'));
+window.addEventListener('langchange', () => {   // the shop changes language without redrawing the cards, so they do not slide in again
+  $$('#shipNoteTop').forEach(e => { e.textContent = shipNote(SHIPPING.freeFrom); });
+  renderFilters(); refreshProductLines(); renderCart();
+});
+/* Only the words that contain numbers are redrawn (stock left, set size, search results); the cards stay as they are */
+function refreshProductLines() {
+  $$('#productGrid .card').forEach(card => {
+    const p = product(+card.dataset.id); if (!p) return;
+    const low = card.querySelector('.price .low');
+    if (low) low.textContent = ' · ' + tr('only {n} left', { n: p.stock });
+    const size = card.querySelector('.size-line');
+    if (size) size.textContent = p.size + (p.includes ? ' · ' + tr('set of {n}', { n: p.includes.split(',').length }) : '');
+  });
+  const n = $$('#productGrid .card').length, words = searchWords(), info = $('#searchInfo');
+  if (info) info.textContent = !words.length ? '' : !n ? tr('No pieces found for “{q}”', { q: query })
+    : n === 1 ? tr('1 piece found for “{q}”', { q: query }) : tr('{n} pieces found for “{q}”', { n, q: query });
+  $('#emptyQuery').textContent = query ? '“' + query + '”' : tr('this category');
+}
 $('#year').textContent = new Date().getFullYear();
 (async function init() {
   const p = new URLSearchParams(location.search);

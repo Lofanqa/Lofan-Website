@@ -23,6 +23,26 @@ function showTab(t) {
 $('#acctTabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab); });
 $('#logoutBtn').addEventListener('click', logout);
 
+/* Invoice: available once the payment is confirmed. The company details come from the public shop data. */
+let ORDERS = [];
+const INVOICE_OK = ['Payment confirmed', 'Preparing', 'Out for delivery', 'Delivered'];
+$('#orderList').addEventListener('click', async e => {
+  const b = e.target.closest('[data-invoice]'); if (!b) return;
+  const w = window.open('', '_blank');                  // opened first, so the browser allows the pop-up
+  try {
+    const o = ORDERS.find(x => x.id === b.dataset.invoice);
+    const co = (await api('/products')).company || {};
+    if (!o) throw new Error(tr('Order not found'));
+    if (!w) return toast(tr('Please allow pop-ups to print the invoice.'));
+    w.document.write(invoiceHTML(o, co));
+    w.document.close();
+  } catch (err) { if (w) w.close(); toast(err.message); }
+});
+
+function itemsLabel(o) {
+  const n = o.items.reduce((s, i) => s + i.qty, 0);
+  return n === 1 ? tr('1 item') : tr('{n} items', { n });
+}
 function progress(o) {
   if (o.status === 'Cancelled') return '';
   const idx = FLOW.indexOf(o.status);
@@ -30,14 +50,16 @@ function progress(o) {
 }
 async function loadOrders() {
   const { orders } = await api('/orders');
+  ORDERS = orders;
   $('#orderList').innerHTML = orders.length ? orders.map(o => `
     <article class="ord big">
       <div class="ord-top"><strong>${o.id}</strong><span class="tag ${tagClass(o.status)}">${esc(LABEL[o.status] || o.status)}</span></div>
-      <p class="muted small">${fmtDate(o.created)} · ${o.items.reduce((s, i) => s + i.qty, 0)} items · <strong>${money(o.total)}</strong>${o.method ? ' · ' + esc(o.method) : ''}</p>
-      <p class="small">${o.items.map(i => `${esc(i.name)} × ${i.qty}`).join(', ')}</p>
+      <p class="muted small">${fmtDate(o.created)} · ${itemsLabel(o)} · <strong>${money(o.total)}</strong>${o.method ? ' · ' + esc(o.method) : ''}</p>
+      <p class="small">${o.items.map(i => `<span>${esc(i.name)}</span> × ${i.qty}`).join(', ')}</p>
       <p class="blurb">${BLURB[o.status] || ''}</p>
       ${progress(o)}
       ${o.status === 'Awaiting payment' ? `<div class="ord-actions"><a class="btn" href="payment.html?order=${o.id}">Complete Payment</a></div>` : ''}
+      ${INVOICE_OK.includes(o.status) ? `<div class="ord-actions"><button class="btn ghost" data-invoice="${o.id}">${esc(tr('Download invoice'))}</button></div>` : ''}
       <div class="ord-actions"><button class="btn ghost" data-open-chat="Hi, about my order ${o.id}: ">Message us about this order</button></div>
       <details><summary>Order history</summary>
         <ul class="events">${o.events.slice().reverse().map(ev => `<li><strong>${esc(ev.status)}</strong>${ev.note ? ' – ' + esc(ev.note) : ''}<small>${fmtDate(ev.created)}</small></li>`).join('')}</ul>
@@ -69,7 +91,7 @@ bindPwRules($('#pwForm'), 'new');
 function fillProfile() {
   const f = $('#profileForm'), u = state.user;
   ['name', 'phone', 'email', 'address'].forEach(k => { f.elements[k].value = u[k] || ''; });
-  $('#hello').innerHTML = `Hello, <em>${esc(u.name.split(' ')[0])}</em>`;
+  $('#hello').innerHTML = `${esc(tr('Hello,'))} <em>${esc(u.name.split(' ')[0])}</em>`;
   drawLocCard();
 }
 
@@ -79,7 +101,7 @@ function drawLocCard() {
   card.innerHTML = `
     <div class="loc-head"><span class="loc-pin">📍</span><div><h3>My location</h3>
       <small class="muted">Share your current location so our delivery team can find you on Google Maps. We only receive it when you press the button, and you can remove it any time.</small></div></div>
-    ${l ? `<p class="loc-ok">✓ Saved ${fmtDate(l.at)} · <a class="ulink" target="_blank" rel="noopener" href="${mapsLink(l.lat, l.lng)}">open in Google Maps</a></p>${mapEmbed(l.lat, l.lng, 220)}` : '<p class="muted small">No location shared yet.</p>'}
+    ${l ? `<p class="loc-ok">✓ ${esc(tr('Saved'))} ${fmtDate(l.at)} · <a class="ulink" target="_blank" rel="noopener" href="${mapsLink(l.lat, l.lng)}">${esc(tr('open in Google Maps'))}</a></p>${mapEmbed(l.lat, l.lng, 220)}` : `<p class="muted small">${esc(tr('No location shared yet.'))}</p>`}
     <div class="loc-btns"><button class="btn" id="locShare">${l ? 'Update my location' : 'Share my current location'}</button>${l ? '<button class="btn ghost" id="locDel">Remove my location</button>' : ''}</div>`;
   $('#locShare').addEventListener('click', async e => {
     e.currentTarget.disabled = true; toast('Finding your location…');
@@ -93,6 +115,12 @@ function drawLocCard() {
   const del = $('#locDel');
   if (del) del.addEventListener('click', async () => { state.user = (await api('/me/location', { method: 'DELETE' })).user; toast('Location removed'); drawLocCard(); });
 }
+
+window.addEventListener('langchange', () => {   // redraw the order cards and the profile in the new language
+  if (!state.user) return;
+  fillProfile();
+  loadOrders().catch(() => {});
+});
 
 (async function init() {
   await loadUser();

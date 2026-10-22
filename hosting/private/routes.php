@@ -621,12 +621,16 @@ function handle_api($method, $route, $body)
 
     if ($R('POST', 'admin/products/delete-soldout')) {   // one click: permanently remove every item that has no stock (owner only; staff ask per item)
         need_owner();
+        $gone = q_all('SELECT * FROM products WHERE stock<=0');
         $n = q_exec('DELETE FROM products WHERE stock<=0');
+        foreach ($gone as $r) remove_product_photos($r);
         log_admin('product.deleteSoldOut', "$n sold-out item(s) deleted");
         return [200, ['ok' => true, 'deleted' => $n]];
     }
-    /* Prices, descriptions, photos and other item details are changed directly only by an OWNER.
-       Staff send the change to the owner (a "request"); it is applied when the owner approves. Stock and hiding an item stay direct. */
+    /* Owners AND staff change product details directly (name, category, price, stock, photos, description, size, set contents,
+       "show in shop"). A NEW item by staff waits in Products & Stock until the owner approves it (or rejects it). Deleting an item
+       forever by staff also waits for the owner's approval. There is no limit on the number of items or photos: the server's own
+       storage is the only limit. */
     if ($R('POST', 'admin/products')) {
         $me = current_user(); $c = product_changes($json(), []);
         if (empty($c['name']) || !isset($c['cat']) || !isset($c['price']) || empty($c['images'])) throw new ApiError(400, 'Name, category, price and at least one photo are required.');
@@ -634,40 +638,36 @@ function handle_api($method, $route, $body)
         $id = q_insert('INSERT INTO products(name,cat,price,stock,img,`desc`,active,images,size,includes) VALUES(?,?,?,?,?,?,?,?,?,?)',
             [$c['name'], $c['cat'], $c['price'], $c['stock'] ?? 0, $c['images'][0], $c['desc'] ?? '', $owner ? ($c['active'] ?? 1) : 0,
                 json_encode($c['images'], JSON_UNESCAPED_SLASHES), $c['size'] ?? '', $c['includes'] ?? '']);
-        if (!$owner) {                                     // staff: the item stays hidden until the owner approves it
-            q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode(['active' => 1]), $me['name'], now(), $id]);
+        if (!$owner) {                                     // staff: hidden until the owner approves it
+            q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode(['new' => true]), $me['name'], now(), $id]);
             approval_add('product_add', $id, 'New item: ' . $c['name'], $c['price'] . ' ' . CURRENCY . ' · hidden until the owner approves it', $me);
-            notify('product', 'New item waiting for approval', $me['name'] . ' added "' . $c['name'] . '" (' . $c['price'] . ' ' . CURRENCY . '). It is hidden until you approve it.', (string)$id, null, true);
+            notify('product', 'New item waiting for approval', $me['name'] . ' added "' . $c['name'] . '" (' . $c['price'] . ' ' . CURRENCY . '). Approve or reject it in Products & Stock.', (string)$id, null, true);
         }
-        log_admin('product.add', $c['name'] . ' (' . $c['price'] . ' QAR, stock ' . ($c['stock'] ?? 0) . ')' . ($owner ? '' : ' - waiting for owner approval'));
-        return [200, ['ok' => true, 'pending' => !$owner]];
+        log_admin('product.add', $c['name'] . ' (' . $c['price'] . ' QAR, stock ' . ($c['stock'] ?? 0) . ')' . ($owner ? '' : ' - waiting for owner approval') . ' by ' . $me['name']);
+        return [200, ['ok' => true, 'id' => $id, 'pending' => !$owner]];
+    }
+    /* One photo per request (keeps every request small, so an item can have as many photos as the server storage allows). */
+    if ($R('POST', 'admin/products/(\d+)/photos')) {
+        $row = q_one('SELECT * FROM products WHERE id=?', [(int)$m[1]]);
+        if (!$row) throw new ApiError(404, 'Not found');
+        $d = $json();
+        $paths = save_product_photos([str_val($d['data'] ?? '')], $row['name']);
+        if (!$paths) throw new ApiError(400, 'Choose a photo (JPG, PNG or WEBP).');
+        $list = array_values(array_merge(product_images($row), $paths));
+        q_exec('UPDATE products SET images=?,img=? WHERE id=?', [json_encode($list, JSON_UNESCAPED_SLASHES), $list[0], (int)$row['id']]);
+        log_admin('product.photo', $row['name'] . ' - photo added (' . count($list) . ' in total)');
+        return [200, ['photo' => $paths[0], 'product' => $prod_out(q_one('SELECT * FROM products WHERE id=?', [(int)$row['id']]))]];
     }
     if ($R('PUT', 'admin/products/(\d+)')) {
         $row = q_one('SELECT * FROM products WHERE id=?', [(int)$m[1]]);
         if (!$row) throw new ApiError(404, 'Not found');
         $me = current_user(); $c = product_changes($json(), $row);
-        $direct = $c; $ask = [];
-        if (!is_owner($me)) {                              // staff: only stock and "hide" are theirs; everything else needs the owner
-            $direct = [];
-            foreach ($c as $k => $v) {
-                if ($k === 'stock' || ($k === 'active' && !$v)) $direct[$k] = $v; else $ask[$k] = $v;
-            }
+        if ($c) {
+            apply_product_changes($row['id'], $c);
+            log_admin('product.edit', $row['name'] . ' - ' . implode('; ', describe_product_changes($row, $c)) . ' by ' . $me['name']);
         }
-        if ($direct) {
-            apply_product_changes($row['id'], $direct);
-            log_admin('product.edit', $row['name'] . ' - ' . implode('; ', describe_product_changes($row, $direct)));
-        }
-        if ($ask) {
-            $old = json_decode((string)($row['req_json'] ?? ''), true);
-            $merged = array_merge(is_array($old) ? $old : [], $ask);
-            q_exec('UPDATE products SET req_json=?,req_by=?,req_at=? WHERE id=?', [json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $me['name'], now(), (int)$row['id']]);
-            $what = implode('; ', describe_product_changes($row, $ask));
-            approval_add('product_change', $row['id'], 'Change: ' . $row['name'], $what, $me);
-            notify('product', 'Item change waiting for approval - ' . $row['name'], $me['name'] . ' asks to change: ' . $what, (string)$row['id'], null, true);
-            log_admin('product.change_request', $row['name'] . ' - ' . $what);
-        }
-        $gone = (array_key_exists('stock', $direct) && (int)$direct['stock'] <= 0) ? sweep_soldout() : 0;
-        return [200, ['ok' => true, 'pending' => (bool)$ask, 'autoDeleted' => $gone]];
+        $gone = (array_key_exists('stock', $c) && (int)$c['stock'] <= 0) ? sweep_soldout() : 0;
+        return [200, ['ok' => true, 'pending' => false, 'autoDeleted' => $gone]];
     }
     if ($R('POST', 'admin/products/(\d+)/change-decision')) {   // the owner approves or rejects what staff asked for
         need_owner(); $d = $json();
@@ -676,11 +676,23 @@ function handle_api($method, $route, $body)
         $req = json_decode((string)($row['req_json'] ?? ''), true);
         if (!is_array($req) || !$req) throw new ApiError(409, 'There is no change waiting for this item.');
         $yes = !empty($d['approve']);
+        if (!empty($req['new'])) {                          // staff added a new item: approve = show it in the shop; reject = discard it
+            $owner = current_user();
+            $asked = q_one("SELECT req_user FROM approvals WHERE ref=? AND kind='product_add' AND status='pending' ORDER BY id DESC LIMIT 1", [(string)$row['id']]);
+            approval_decide((string)$row['id'], ['product_add'], $yes ? 'approved' : 'rejected', $owner['name']);
+            if ($yes) q_exec('UPDATE products SET active=1,req_json=NULL,req_by=NULL,req_at=NULL WHERE id=?', [(int)$row['id']]);
+            else { q_exec('DELETE FROM products WHERE id=?', [(int)$row['id']]); remove_product_photos($row); }
+            notify('product', ($yes ? 'New item approved' : 'New item rejected') . ' - ' . $row['name'], $owner['name'] . ($yes ? ' approved' : ' rejected') . ' the new item you added.', (string)$row['id'],
+                $asked ? (int)$asked['req_user'] : null, !$asked);
+            log_admin($yes ? 'product.add_approve' : 'product.add_reject', $row['name'] . ' (added by ' . $row['req_by'] . ')');
+            if ($yes) sweep_soldout();
+            return [200, ['product' => $yes ? $prod_out(q_one('SELECT * FROM products WHERE id=?', [(int)$row['id']])) : null, 'deleted' => !$yes]];
+        }
         if (!empty($req['delete'])) {                       // staff asked to delete this item forever
             $owner = current_user();
             $asked = q_one("SELECT req_user FROM approvals WHERE ref=? AND kind='product_delete' AND status='pending' ORDER BY id DESC LIMIT 1", [(string)$row['id']]);
             approval_decide((string)$row['id'], ['product_delete', 'product_change', 'product_add'], $yes ? 'approved' : 'rejected', $owner['name']);
-            if ($yes) q_exec('DELETE FROM products WHERE id=?', [(int)$row['id']]);
+            if ($yes) { q_exec('DELETE FROM products WHERE id=?', [(int)$row['id']]); remove_product_photos($row); }
             else q_exec('UPDATE products SET req_json=NULL,req_by=NULL,req_at=NULL WHERE id=?', [(int)$row['id']]);
             notify('product', ($yes ? 'Deletion approved' : 'Deletion rejected') . ' - ' . $row['name'], $owner['name'] . ($yes ? ' approved' : ' rejected') . ' your request to delete this item.', (string)$row['id'],
                 $asked ? (int)$asked['req_user'] : null, !$asked);
@@ -711,6 +723,7 @@ function handle_api($method, $route, $body)
             return [200, ['ok' => true, 'pending' => true]];
         }
         q_exec('DELETE FROM products WHERE id=?', [(int)$row['id']]);
+        remove_product_photos($row);
         log_admin('product.delete', 'Deleted forever: ' . $row['name']);
         return [200, ['ok' => true]];
     }

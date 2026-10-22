@@ -376,21 +376,10 @@ async function renderOrders(keep) {
   };
 }
 async function printInvoice(o) {
-  const co = await getCompany(), w = window.open('', '_blank');
+  const w = window.open('', '_blank');   // opened first, so the browser allows the pop-up
   if (!w) return toast('Please allow pop-ups to print the invoice.');
-  const rows = o.items.map(i => `<tr><td>${esc(i.name)}</td><td class="r">${i.qty}</td><td class="r">${i.price}</td><td class="r">${i.price * i.qty}</td></tr>`).join('');
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${o.id}</title>
-  <style>body{font:14px/1.5 Arial,sans-serif;color:#222;max-width:760px;margin:30px auto;padding:0 20px}h1{font-size:26px;margin:0}table{width:100%;border-collapse:collapse;margin:18px 0}
-  th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left}.r{text-align:right}.top{display:flex;justify-content:space-between;gap:20px}.muted{color:#666}.tot td{font-weight:bold;border-top:2px solid #222}
-  @media print{button{display:none}}</style></head><body>
-  <div class="top"><div><h1>${esc(co.name)}</h1><div class="muted">${esc(co.address)}<br>${esc(co.phone)} · ${esc(co.email)}${co.crNumber ? '<br>CR No. ' + esc(co.crNumber) : ''}</div></div>
-  <div style="text-align:right"><h1>INVOICE</h1><div>${o.id}<br>${new Date(o.created * 1000).toLocaleDateString()}<br><b>${esc(o.status)}</b></div></div></div>
-  <p><b>Bill / deliver to</b><br>${esc(o.delivery.name)}<br>+${esc(o.delivery.phone)} · ${esc(o.delivery.email)}<br>${esc(o.delivery.address)}</p>
-  <table><tr><th>Item</th><th class="r">Qty</th><th class="r">Price (QAR)</th><th class="r">Total (QAR)</th></tr>${rows}
-  <tr><td colspan="3" class="r">Subtotal</td><td class="r">${o.subtotal}</td></tr><tr><td colspan="3" class="r">Shipping</td><td class="r">${o.shipping || 'Free'}</td></tr>
-  <tr class="tot"><td colspan="3" class="r">Total (QAR)</td><td class="r">${o.total}</td></tr></table>
-  <p class="muted">Payment: ${esc(o.method || 'not yet received')}${o.txn ? ' · ref ' + esc(o.txn) : ''}<br>Thank you for shopping with ${esc(co.name)}.</p>
-  <button onclick="print()">Print</button><script>window.onload=function(){setTimeout(function(){print()},300)}<\/script></body></html>`);
+  const co = await getCompany();
+  w.document.write(invoiceHTML(o, co));
   w.document.close();
 }
 
@@ -408,7 +397,7 @@ async function renderProducts() {
       (An item with stock reserved by an unpaid order is kept until that order is paid or cancelled.)</span></label>
     <div id="chgList"></div>
     <h3>Add a new item</h3>
-    ${owner ? '' : '<p class="set-warn">You are signed in as <strong>Staff</strong>: a new item stays hidden until the owner approves it, and price / description / photo changes are sent to the owner for approval.</p>'}
+    ${owner ? '' : '<p class="set-ok">You are signed in as <strong>Staff</strong>: you can change items directly. A new item, or deleting an item forever, waits for the owner\'s approval here in Products &amp; Stock.</p>'}
     <form id="addForm" class="adm-add" novalidate>
       <label>Item name<input name="name" required></label>
       <label>Category<select name="cat">${Object.entries(d.categories).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('')}</select></label>
@@ -436,7 +425,7 @@ async function renderProducts() {
     const q = f.q.toLowerCase();
     const list = products.filter(p => (!q || (p.name + ' ' + (d.categories[p.cat] || '')).toLowerCase().includes(q)) && (!f.mode || (f.mode === 'out' ? p.stock <= 0 : p.stock > 0 && p.stock <= 5)));
     $('#prodRows').innerHTML = list.length ? list.map(p => `<div class="adm-row prod ${p.stock <= 0 ? 'soldrow' : ''}" data-id="${p.id}">
-        <img src="${esc(p.img)}" alt=""><span><strong>${esc(p.name)}</strong><small>${esc(p.desc || '')}</small>${p.stock <= 0 ? '<em class="sold-tag">Sold out</em>' : p.stock <= 5 ? '<em class="low-tag">Low stock</em>' : ''}${p.images.length > 1 ? `<em class="low-tag" style="background:#e3ecd4;color:#3d5028">${p.images.length} photos</em>` : ''}${!p.active ? '<em class="sold-tag">Hidden</em>' : ''}${p.request ? '<em class="low-tag">Change waiting for owner</em>' : ''}</span><span class="pcat">${esc(d.categories[p.cat] || p.cat)}</span>
+        <img src="${esc(p.img)}" alt=""><span><strong>${esc(p.name)}</strong><small>${esc(p.desc || '')}</small>${p.stock <= 0 ? '<em class="sold-tag">Sold out</em>' : p.stock <= 5 ? '<em class="low-tag">Low stock</em>' : ''}${p.images.length > 1 ? `<em class="low-tag" style="background:#e3ecd4;color:#3d5028">${p.images.length} photos</em>` : ''}${!p.active ? '<em class="sold-tag">Hidden</em>' : ''}${p.request ? `<em class="low-tag">${p.request.changes.new ? 'New item waiting for the owner' : p.request.changes.delete ? 'Deletion waiting for the owner' : 'Change waiting for the owner'}</em>` : ''}</span><span class="pcat">${esc(d.categories[p.cat] || p.cat)}</span>
         ${owner
           ? `<label class="pf"><em>Price (QAR)</em><input type="number" min="0" data-f="price" value="${p.price}"></label>`
           : `<span class="pf"><em>Price (QAR)</em><b class="pricetxt" title="Only the owner can change the price - use Edit to send a request">${p.price} 🔒</b></span>`}
@@ -451,8 +440,9 @@ async function renderProducts() {
     const box = $('#chgList'); if (!box) return;
     const reqs = products.filter(p => p.request);
     if (!reqs.length) { box.innerHTML = ''; return; }
-    box.innerHTML = `<h3>${owner ? 'Item changes waiting for your approval' : 'Your changes waiting for the owner'} (${reqs.length})</h3>` + reqs.map(p => {
+    box.innerHTML = `<h3>${owner ? 'Waiting for your approval' : 'Waiting for the owner'} (${reqs.length})</h3>` + reqs.map(p => {
       const c = p.request.changes, line = k => {
+        if (k === 'new') return `<li><strong>New item</strong> · ${p.price} QAR · stock ${p.stock} · ${p.images.length} photo${p.images.length === 1 ? '' : 's'}${p.size ? ' · ' + esc(p.size) : ''}</li>`;
         if (k === 'delete') return '<li><strong>Delete this item forever</strong></li>';
         if (k === 'images') return `<li>Photos: ${p.images.length} → ${c.images.length}</li>`;
         if (k === 'desc') return `<li>Description: <em>${esc(String(c.desc).slice(0, 140))}</em></li>`;
@@ -461,8 +451,8 @@ async function renderProducts() {
         return `<li>${REQ_LABEL[k] || k}: ${esc(String(p[k] ?? ''))} → <strong>${esc(String(c[k]))}</strong></li>`;
       };
       return `<div class="chg" data-id="${p.id}"><img src="${esc(p.img)}" alt="">
-        <div><strong>${esc(p.name)}</strong> <span class="muted small">asked by ${esc(p.request.by)} · ${fmtDate(p.request.at)}</span><ul>${Object.keys(c).map(line).join('')}</ul></div>
-        ${owner ? `<div class="chg-btns"><button class="btn danger" data-chgyes="${p.id}">Approve</button><button class="btn ghost" data-chgno="${p.id}">Reject</button></div>` : ''}</div>`;
+        <div><strong>${esc(p.name)}</strong> <span class="muted small">${c.new ? 'added' : 'asked'} by ${esc(p.request.by)} · ${fmtDate(p.request.at)}</span><ul>${Object.keys(c).map(line).join('')}</ul></div>
+        ${owner ? `<div class="chg-btns"><button class="btn danger" data-chgyes="${p.id}">${c.new ? 'Approve – show in the shop' : c.delete ? 'Approve – delete forever' : 'Approve'}</button><button class="btn ghost" data-chgno="${p.id}">${c.new ? 'Reject – discard' : 'Reject'}</button></div>` : ''}</div>`;
     }).join('');
   };
   drawRows();
@@ -496,7 +486,7 @@ async function renderProducts() {
       const pid = t.dataset.chgyes || t.dataset.chgno;
       try {
         await api(`/admin/products/${pid}/change-decision`, { method: 'POST', body: { approve: !!t.dataset.chgyes } });
-        toast(t.dataset.chgyes ? 'Change approved and applied' : 'Change rejected'); renderProducts();
+        toast(t.dataset.chgyes ? 'Approved' : 'Rejected'); renderProducts();
       } catch (err) { toast(err.message); }
       return;
     }
@@ -525,21 +515,19 @@ async function renderProducts() {
     e.preventDefault();
     const fm = e.target, v = Object.fromEntries(new FormData(fm)), files = [...fm.elements.photos.files], btn = $('button[type=submit]', fm);
     if (!files.length) return toast('Choose at least one photo.');
-    if (files.length > 8) return toast('You can add up to 8 photos.');
     btn.disabled = true;
     try {
-      const images = [];
-      for (const file of files) images.push({ data: await resizeImage(file) });
-      const r = await api('/admin/products', { method: 'POST', body: { name: v.name, cat: v.cat, price: v.price, stock: v.stock, desc: v.desc, size: v.size, includes: v.includes, images } });
-      toast(r.pending ? 'Item saved (hidden) – waiting for the owner to approve it' : 'Item added to the shop'); renderProducts();
+      // the item is created with its first photo; the other photos follow one at a time (no limit on how many)
+      const r = await api('/admin/products', { method: 'POST', body: { name: v.name, cat: v.cat, price: v.price, stock: v.stock, desc: v.desc, size: v.size, includes: v.includes, images: [{ data: await resizeImage(files[0]) }] } });
+      for (const file of files.slice(1)) await api(`/admin/products/${r.id}/photos`, { method: 'POST', body: { data: await resizeImage(file) } });
+      toast(r.pending ? 'Sent to the owner – the item appears in the shop once approved' : 'Item added to the shop'); renderProducts();
     } catch (err) { toast(err.message || 'Could not add item'); btn.disabled = false; }
   });
 }
-/* Edit one item: details + photo manager. The owner saves directly; staff send it to the owner for approval. */
+/* Edit one item: details + photo manager. Owners and staff save directly (no approval). */
 function editItem(p, categories, owner, done) {
   let photos = p.images.map(src => ({ src, url: src }));          // {src: existing path} or {data: new upload, url: preview}
   Modal.open(`<h2>Edit <em>item</em></h2>
-    ${owner ? '' : '<p class="gate-note">Price, description, size and photos are changed only after the <strong>owner approves</strong>. Your request is sent when you press the button.</p>'}
     <form id="editForm" novalidate>
       <label>Item name<input name="name" value="${esc(p.name)}" maxlength="100"></label>
       <label>Category<select name="cat">${Object.entries(categories).map(([k, v]) => `<option value="${esc(k)}" ${k === p.cat ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
@@ -551,7 +539,7 @@ function editItem(p, categories, owner, done) {
       <p class="small"><strong>Photos</strong> <span class="muted">– the first photo is the main one. In the shop all photos slide every 3 seconds.</span></p>
       <div class="ph-list" id="phList"></div>
       <label>Add more photos<input type="file" id="phAdd" accept="image/*" multiple></label>
-      <button class="btn full" type="submit">${owner ? 'Save changes' : 'Send for owner approval'}</button><p class="note" id="editNote"></p>
+      <button class="btn full" type="submit">Save changes</button><p class="note" id="editNote"></p>
     </form>`);
   const draw = () => {
     $('#phList').innerHTML = photos.map((ph, i) => `<div class="ph">${i === 0 ? '<span class="main">Main</span>' : ''}<img src="${esc(ph.url)}" alt="">
@@ -568,7 +556,6 @@ function editItem(p, categories, owner, done) {
   });
   $('#phAdd').addEventListener('change', async e => {
     const files = [...e.target.files];
-    if (photos.length + files.length > 8) { toast('An item can have up to 8 photos.'); e.target.value = ''; return; }
     for (const f of files) { const data = await resizeImage(f); photos.push({ data, url: data }); }
     e.target.value = ''; draw();
   });
@@ -579,13 +566,14 @@ function editItem(p, categories, owner, done) {
     const v = Object.fromEntries(new FormData(e.target)), body = {};
     for (const k of ['name', 'cat', 'desc', 'size', 'includes']) if (v[k] !== String(p[k] ?? '')) body[k] = v[k];
     for (const k of ['price', 'stock']) if (+v[k] !== p[k]) body[k] = v[k];
-    const sameImgs = photos.length === p.images.length && photos.every((ph, i) => ph.src === p.images[i]);
-    if (!sameImgs) body.images = photos.map(ph => ph.src ? ph.src : { data: ph.data });
-    if (!Object.keys(body).length) { Modal.close(); return; }
     const btn = $('button[type=submit]', e.target); btn.disabled = true;
     try {
+      for (const ph of photos) if (!ph.src) ph.src = (await api(`/admin/products/${p.id}/photos`, { method: 'POST', body: { data: ph.data } })).photo;   // new photos first, one at a time
+      const sameImgs = photos.length === p.images.length && photos.every((ph, i) => ph.src === p.images[i]);
+      if (!sameImgs) body.images = photos.map(ph => ph.src);
+      if (!Object.keys(body).length) { Modal.close(); done(); return; }
       const r = await api('/admin/products/' + p.id, { method: 'PUT', body });
-      Modal.close(); toast(r.pending ? 'Sent to the owner for approval' : 'Item saved'); done();
+      Modal.close(); toast('Item saved'); done();
     } catch (err) { note.textContent = err.message; note.classList.add('err'); btn.disabled = false; }
   });
 }

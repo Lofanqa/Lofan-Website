@@ -5,7 +5,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = n => `${n} QAR`;
-const fmtDate = t => new Date(t * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+const fmtDate = t => new Date(t * 1000).toLocaleString(LOCALE(), { dateStyle: 'medium', timeStyle: 'short' });
 
 /* ---------- Location sharing + Google Maps (no API key needed) ---------- */
 const mapsLink = (lat, lng) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
@@ -20,7 +20,7 @@ function getLocation() {   // asks the customer's browser for their position –
         ? (window.isSecureContext ? 'Location permission was blocked. Click the padlock in the address bar, allow Location, then try again.' : 'Location needs a secure (https) address.')
         : e.code === 3 ? 'Finding your location took too long. Please try again.' : 'Your location is not available right now.')),
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
-  });
+  });f
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -59,8 +59,8 @@ function showServerDown() {
     ? `<div id="serverDown" class="server-down">
     The Lofan server is not running. <strong>Double-click <code>Start-Lofan.bat</code></strong> in the Lofan-Website folder
     (or in VS Code press <code>Ctrl+Shift+B</code>), then open <a href="${SERVER_URL}"><strong>${SERVER_URL}</strong></a>.</div>`
-    : `<div id="serverDown" class="server-down">We are having a short technical problem. Please refresh the page in a minute – your cart is safe.
-    You can also reach us on WhatsApp / phone shown in the Contact section.</div>`);
+    : `<div id="serverDown" class="server-down">${esc(tr('We are having a short technical problem. Please refresh the page in a minute – your cart is safe.'))}
+    ${esc(tr('You can also reach us on WhatsApp / phone shown in the Contact section.'))}</div>`);
 }
 
 function toast(msg) {
@@ -115,7 +115,7 @@ async function loadUser() {
 }
 function updateAccountBtn() {
   const b = $('#accountBtn'); if (!b) return;
-  b.textContent = state.user ? (state.user.role === 'admin' ? 'Admin' : 'Hi, ' + state.user.name.split(' ')[0]) : 'My Account';
+  b.textContent = state.user ? (state.user.role === 'admin' ? 'Admin' : tr('Hi, {name}', { name: state.user.name.split(' ')[0] })) : 'My Account';
   const out = $('#topLogout'), sep = $('#topLogoutSep');       // a Log out button is always there while somebody is signed in
   if (out) out.hidden = !state.user;
   if (sep) sep.hidden = !state.user;
@@ -127,7 +127,7 @@ function blinkAccount() {
   b.classList.remove('blink'); void b.offsetWidth; b.classList.add('blink');
   clearTimeout(blinkAccount.t); blinkAccount.t = setTimeout(() => b.classList.remove('blink'), 7000);
 }
-const shipNote = n => (n > 0 ? `Free shipping on orders of ${n} QAR or more` : 'Free shipping on all orders');
+const shipNote = n => (n > 0 ? tr('Free shipping on orders above {n} QAR or more', { n }) : tr('Free shipping on all orders'));
 function bindAccountBtn() {
   const lo = $('#topLogout'); if (lo) lo.addEventListener('click', logout);
   const b = $('#accountBtn'); if (!b) return;
@@ -254,7 +254,7 @@ async function onGoogle(resp) {
 function askPhone(next) {   // Google does not share a phone number, and we need one for delivery
   authOpts = { next };
   Modal.open(`<h2>One last <em>step</em></h2>
-    <p class="gate-note">Welcome, ${esc(state.user.name)}! Please add your mobile number so we can reach you about deliveries.</p>
+    <p class="gate-note">${esc(tr('Welcome, {name}! Please add your mobile number so we can reach you about deliveries.', { name: state.user.name }))}</p>
     <form data-auth-form="phone" novalidate>
       <label>Mobile number (Qatar)<input name="phone" inputmode="tel" autocomplete="tel" placeholder="e.g. 5555 1234" required></label>
       <button class="btn full" type="submit">Save &amp; Continue</button><p class="note" data-note></p>
@@ -310,11 +310,11 @@ function renderChrome() {
   const el = $('#chrome'); if (!el) return;
   el.innerHTML = `
   <div class="topbar"><span></span><p id="shipNoteTop">Free shipping on larger orders</p>
-    <nav><button id="accountBtn">My Account</button><i id="topLogoutSep" hidden>|</i><button id="topLogout" hidden>Log out</button><i>|</i><a href="index.html?search=1">Search</a><i>|</i><a href="index.html#cart">Cart (<span id="cartCount">0</span>)</a></nav></div>
+    <nav><button id="accountBtn">My Account</button><i id="topLogoutSep" hidden>|</i><button id="topLogout" hidden>Log out</button><i>|</i><a href="index.html?search=1">Search</a><i>|</i><a href="index.html#cart">Cart (<span id="cartCount">0</span>)</a><i>|</i><button id="langBtn" type="button" aria-label="Change language">العربية</button></nav></div>
   <header class="header">
     <button class="burger" id="burger" aria-label="Menu"><span></span><span></span><span></span></button>
     <nav class="nav nav-left"><a href="index.html">Home</a><a href="index.html#shop">Shop</a><a href="index.html#about">About</a></nav>
-    <a href="index.html" class="brand"><img src="images/logo.jpg" alt="Lofan"><small>Home Accessories</small></a>
+    <a href="index.html" class="brand"><span class="logo-wrap"><img src="images/logo.jpg" alt="Lofan"><i class="glint"></i><b class="spark s1"></b><b class="spark s2"></b><b class="spark s3"></b></span><small>Home Accessories</small></a>
     <nav class="nav nav-right"><a href="index.html#custom">Custom Orders</a><a href="index.html#contact">Contact</a></nav>
   </header>`;
   $('#burger').addEventListener('click', () => $('.header').classList.toggle('menu'));
@@ -361,7 +361,7 @@ document.addEventListener('touchend', e => {
 
 /* ---------- Live chat with the Lofan team (customers) ---------- */
 const Chat = { last: 0, timer: null, shown: false };
-const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const hhmm = t => new Date(t * 1000).toLocaleTimeString(LOCALE(), { hour: '2-digit', minute: '2-digit' });
 function initChat() {
   if (document.body.classList.contains('admin') || $('#chatFab')) return;
   document.body.insertAdjacentHTML('beforeend', `
@@ -386,7 +386,7 @@ function initChat() {
 function chatBubble(m) {
   const mine = m.sender === 'customer';
   if (m.loc) return `<div class="msg ${mine ? 'me' : 'them'} loc"><p>📍 ${mine ? 'My location' : 'Location'}</p><a href="${mapsLink(m.loc.lat, m.loc.lng)}" target="_blank" rel="noopener">Open in Google Maps</a><small>${hhmm(m.created)}</small></div>`;
-  return `<div class="msg ${mine ? 'me' : 'them'}"><p>${esc(m.body)}</p><small>${hhmm(m.created)}</small></div>`;
+  return `<div class="msg ${mine ? 'me' : 'them'}" data-raw><p>${esc(m.body)}</p><small>${hhmm(m.created)}</small></div>`;
 }
 async function shareLocationInChat() {
   if (!state.user) { guestSend('📍 My current location'); return; }
@@ -433,7 +433,7 @@ function guestSend(text) {
   const b = $('#chatBody');
   b.insertAdjacentHTML('beforeend', `<div class="msg me"><p>${esc(text)}</p></div>
     <div class="msg them"><p>Please <strong>create an account</strong> to send your message – then we can reply to you and follow your orders. 💚</p></div>`);
-  b.scrollTop = b.scrollHeight; Chat.pending = text; blinkAccount();
+  b.scrollTop = b.scrollHeight; Chat.pending = text; blinkAccount();   // the words the customer typed stay as they wrote them
   const c = $('#chatCreate'); if (c) c.classList.add('attention');
 }
 async function loadChat() {
@@ -447,12 +447,12 @@ async function sendChat(e) {
   try { const r = await api('/chat', { method: 'POST', body: { body } }); addMessages([r.message]); }
   catch (err) { input.value = body; toast(err.message); }
 }
-const BASE_TITLE = document.title;
+const BASE_TITLE = () => (isAr() && AR[PAGE_TITLE] ? AR[PAGE_TITLE] : PAGE_TITLE);
 async function pollUnread() {   // red number on the chat button when the Lofan team has written to this customer
   const b = $('#chatBadge'), fab = $('#chatFab'); if (!b || !fab) return;
   const paint = n => {
     b.hidden = !n; b.textContent = n > 9 ? '9+' : n; fab.classList.toggle('has-unread', n > 0);
-    document.title = (n ? `(${n}) ` : '') + BASE_TITLE;
+    document.title = (n ? `(${n}) ` : '') + BASE_TITLE();
   };
   if (!state.user || state.user.role === 'admin' || Chat.shown) { paint(0); return; }
   try { const { unread } = await api('/chat/unread'); paint(unread); } catch { /* ignore */ }
@@ -462,4 +462,80 @@ document.addEventListener('click', e => {   // "Message us about this order" sty
 });
 
 document.addEventListener('DOMContentLoaded', () => { renderChrome(); ensureModal(); bindAccountBtn(); updateAccountBtn(); updateCartCount(); loadConfig(); initChat(); });
+window.addEventListener('langchange', () => { Modal.close(); updateAccountBtn(); });   // pop-ups are closed on a language switch so they never show mixed languages
 
+/* Printable invoice (A4). Follows the Lofan invoice template: logo top-left, INVOICE top-right, billed-to and
+   invoice no. / date, item table (Item, Quantity, Unit Price, Total), total, "Thank you!" and payment information. */
+function invoiceHTML(o, co) {
+  const dl = o.delivery || {};
+  const date = new Date(o.created * 1000).toLocaleDateString(LOCALE() || 'en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const rows = o.items.map(i => `<tr><td class="it">${esc(tr(i.name))}</td><td class="n">${i.qty}</td><td class="n">${i.price}</td><td class="n">${i.price * i.qty}</td><td class="sp"></td></tr>`);
+  rows.push(`<tr><td class="it">${tr('Delivery')}</td><td class="n"></td><td class="n"></td><td class="n">${o.shipping ? o.shipping : tr('Free')}</td><td class="sp"></td></tr>`);
+  while (rows.length < 3) rows.push('<tr><td class="it"></td><td class="n"></td><td class="n"></td><td class="n"></td><td class="sp"></td></tr>');
+  const paid = o.method ? `${esc(o.method)}${o.txn ? ' · ' + esc(tr('ref')) + ' ' + esc(o.txn) : ''}` : tr('Not yet paid');
+  const many = rows.length > 3 ? ' many' : '';
+  return `<!doctype html><html lang="${LANG}" dir="${isAr() ? 'rtl' : 'ltr'}"><head><meta charset="utf-8"><title>${tr('INVOICE')} ${esc(o.id)}</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Jost:wght@300;400;500;600&family=Cairo:wght@400;600;700&display=swap">
+  <style>
+    @page { size: A4; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #e6e6e0; }
+    body { font: 11pt/1.45 Jost, Arial, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .page { width: 210mm; min-height: 297mm; margin: 0 auto; background: #f5f5f0; padding: 21mm 20.6mm 0 21.8mm; }
+    .head { display: flex; justify-content: space-between; align-items: center; height: 22.3mm; }
+    .logo { width: 51mm; height: 22.3mm; background: #fff; }
+    .logo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .title { margin: 0; font: 700 50pt/1 'Cormorant Garamond', Georgia, serif; letter-spacing: .3mm; }
+    .meta { display: grid; grid-template-columns: 60.4% 1fr; margin-top: 16.5mm; min-height: 41mm; }
+    .meta h4 { margin: 0 0 1mm; font-size: 13pt; font-weight: 600; }
+    .meta p { margin: 0; }
+    .meta .inv { font-size: 13pt; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { height: 13.2mm; padding: 0; vertical-align: middle; border-bottom: .3mm solid #111; font-size: 12pt; }
+    thead th { border-top: .3mm solid #111; font-size: 13pt; font-weight: 600; }
+    .it { text-align: left; padding-left: 3.1mm; }
+    .n { text-align: right; }
+    .w1 { width: 51.4%; } .w2 { width: 15.2%; } .w3 { width: 16.2%; } .w4 { width: 12.9%; } .w5 { width: 4.3%; }
+    .sum { display: flex; align-items: center; gap: 4mm; margin: 26mm 0 0 69.3%; padding: 2.5mm 0 0 5.6mm; border-top: .3mm solid #111; font-size: 18pt; font-weight: 600; }
+    .sum .sv { margin-left: auto; }
+    .thanks { margin: 5mm 0 0; font: 300 22pt/1.2 Jost, Arial, sans-serif; }
+    .pay { margin-top: 22mm; }
+    .many td { height: 10.5mm; }
+    .many .sum { margin-top: 16mm; }
+    .many .pay { margin-top: 16mm; }
+    .pay h4 { margin: 0 0 2mm; font-size: 13pt; font-weight: 600; text-transform: uppercase; }
+    .pay p { margin: 0 0 1mm; }
+    .noprint { text-align: center; padding: 12px; }
+    @media print { .noprint { display: none; } html, body { background: #f5f5f0; } }
+    html[lang="ar"] body { font-family: 'Cairo', Arial, sans-serif; }
+    html[lang="ar"] .title { font-family: 'Cairo', sans-serif; font-weight: 700; font-size: 40pt; }
+    html[dir="rtl"] .it { text-align: right; padding-left: 0; padding-right: 3.1mm; }
+    html[dir="rtl"] .sum { margin-left: 0; margin-right: 69.3%; padding: 2.5mm 5.6mm 0 0; }
+    html[dir="rtl"] .sum .sv { margin-left: 0; margin-right: auto; }
+  </style></head><body>
+  <div class="noprint"><button onclick="print()">${tr('Print or save as PDF')}</button></div>
+  <div class="page${many}">
+    <div class="head">
+      <div class="logo"><img src="${location.origin}/images/logo.jpg" alt="Lofan"></div>
+      <h1 class="title">${tr('INVOICE')}</h1>
+    </div>
+    <div class="meta">
+      <div><h4>${tr('Billed to:')}</h4><p>${esc(dl.name)}</p><p>+${esc(dl.phone)}</p><p>${esc(dl.email)}</p><p>${esc(dl.address)}</p></div>
+      <div class="inv"><p>${tr('Invoice no.:')} ${esc(o.id)}</p><p>${tr('Date:')} ${date}</p></div>
+    </div>
+    <table>
+      <thead><tr><th class="it w1">${tr('Item')}</th><th class="n w2">${tr('Quantity')}</th><th class="n w3">${tr('Unit Price')}</th><th class="n w4">${tr('Total')}</th><th class="w5"></th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+    <div class="sum"><span class="sl">${tr('Total')}</span><span>${tr('QAR')}</span><span class="sv">${o.total}</span></div>
+    <p class="thanks">${tr('Thank you!')}</p>
+    <div class="pay">
+      <h4>${tr('Payment information')}</h4>
+      <p>${tr('Method:')} ${paid}</p>
+      <p>${tr('Status:')} ${esc(tr(o.status))}</p>
+      <p>${tr('Pay to:')} ${esc(co.name)}${co.crNumber ? ' · ' + esc(tr('CR No.')) + ' ' + esc(co.crNumber) : ''}</p>
+      <p>${esc(co.address)} · ${esc(co.phone)} · ${esc(co.email)}</p>
+    </div>
+  </div>
+  <script>window.onload=function(){setTimeout(function(){print()},400)}<\/script></body></html>`;
+}

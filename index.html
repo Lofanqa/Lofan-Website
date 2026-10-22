@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lofan Home Accessories | Embroidered Pieces for Every Occasion</title>
 <meta name="description" content="Lofan Development & Trading – embroidered napkins, placemats, trays, coasters and custom home accessories in Qatar.">
 <link rel="icon" href="images/logo.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=Jost:wght@300;400;500&family=Cairo:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -16,7 +16,7 @@
 <div class="topbar">
   <span></span>
   <p id="shipNoteTop">Free shipping on larger orders</p>
-  <nav><button id="accountBtn">My Account</button><i id="topLogoutSep" hidden>|</i><button id="topLogout" hidden>Log out</button><i>|</i><button id="searchBtn">Search</button><i>|</i><button id="cartBtn">Cart (<span id="cartCount">0</span>)</button></nav>
+  <nav><button id="accountBtn">My Account</button><i id="topLogoutSep" hidden>|</i><button id="topLogout" hidden>Log out</button><i>|</i><button id="searchBtn">Search</button><i>|</i><button id="cartBtn">Cart (<span id="cartCount">0</span>)</button><i>|</i><button id="langBtn" type="button" aria-label="Change language">العربية</button></nav>
 </div>
 
 <header class="header" id="top">
@@ -25,7 +25,7 @@
     <a href="#top" class="active">Home</a><a href="#shop">Shop</a><a href="#about">About</a>
   </nav>
   <a href="#top" class="brand">
-    <img src="images/logo.jpg" alt="Lofan">
+    <span class="logo-wrap"><img src="images/logo.jpg" alt="Lofan"><i class="glint"></i><b class="spark s1"></b><b class="spark s2"></b><b class="spark s3"></b></span>
     <small>Home Accessories</small>
   </a>
   <nav class="nav nav-right">
@@ -47,7 +47,7 @@
   <img src="images/hero-scene.jpg" alt="Embroidered placemats and napkin on a travertine table" class="hero-img">
   <div class="hero-text">
     <p class="eyebrow">Timeless Details</p>
-    <h1>For a More<br><em>Beautiful Home</em></h1>
+    <h1 data-ar-html="لمنزل<br><em>أجمل</em>">For a More<br><em>Beautiful Home</em></h1>
     <span class="rule"></span>
     <p class="sub">Embroidered pieces<br>for every occasion</p>
     <a href="#shop" class="btn">Shop Now <b>&rarr;</b></a>
@@ -115,7 +115,7 @@
   <div class="enq-img"><img src="images/custom.jpg" alt="Custom tassel napkin"></div>
   <div class="enq-form">
     <p class="eyebrow">Custom &amp; Commercial Orders</p>
-    <h2>Custom <em>order</em></h2>
+    <h2 data-ar-html="طلب <em>مخصص</em>">Custom <em>order</em></h2>
     <p class="lead">Hotels, restaurants, gifting and events – tell us what you need and our team will respond with a tailored proposal.</p>
     <form id="enquiryForm" novalidate>
       <div class="row">
@@ -169,6 +169,7 @@
 </footer>
 
 <div class="toast" id="toast"></div>
+<script src="js/i18n.js"></script>
 <script src="js/common.js"></script>
 <script src="js/main.js"></script>
 </body>

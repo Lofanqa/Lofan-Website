@@ -43,7 +43,7 @@ async function stepDelivery() {
     <div class="co-col">
       <h3>Your order</h3>
       <div class="summary">
-        ${items.map(i => `<div class="sum-row"><span>${esc(i.p.name)} × ${i.qty}</span><span>${money(i.p.price * i.qty)}</span></div>`).join('')}
+        ${items.map(i => `<div class="sum-row"><span><span>${esc(i.p.name)}</span> × ${i.qty}</span><span>${money(i.p.price * i.qty)}</span></div>`).join('')}
         <div class="sum-row"><span>Shipping</span><span>${shipping ? money(shipping) : 'Free'}</span></div>
         <div class="sum-row total"><span>Total</span><strong>${money(total)}</strong></div>
       </div>
@@ -54,8 +54,8 @@ async function stepDelivery() {
   </form>`;
   let loc = null;   // set only when the customer presses "Share my location"
   const drawLoc = () => {
-    $('#locInfo').innerHTML = loc ? `<p class="loc-ok">✓ Location captured${loc.acc ? ` (accurate to about ${loc.acc} m)` : ''} ·
-      <a class="ulink" target="_blank" rel="noopener" href="${mapsLink(loc.lat, loc.lng)}">check it on Google Maps</a> · <button type="button" class="ulink" id="locRemove">Remove</button></p>${mapEmbed(loc.lat, loc.lng, 170)}` : '';
+    $('#locInfo').innerHTML = loc ? `<p class="loc-ok"><span>✓</span> <span>${tr('Location captured')}</span>${loc.acc ? ` · <small>${tr('accurate to about')} ${loc.acc} m</small>` : ''} ·
+      <a class="ulink" target="_blank" rel="noopener" href="${mapsLink(loc.lat, loc.lng)}">${tr('check it on Google Maps')}</a> · <button type="button" class="ulink" id="locRemove">${tr('Remove')}</button></p>${mapEmbed(loc.lat, loc.lng, 170)}` : '';
     $('#locBtn').textContent = loc ? 'Update my location' : 'Share my location';
     const rm = $('#locRemove'); if (rm) rm.addEventListener('click', () => { loc = null; drawLoc(); });
   };
@@ -85,7 +85,7 @@ async function stepPay() {
   setStep(2);
   if (!info) info = await api('/payment-info');
   if (!info.methods.length) {
-    view.innerHTML = `<div class="gate"><p>Online payment details are not available yet. Your order <strong>${order.id}</strong> is saved – please contact us on <strong>${esc(info.company.phone)}</strong> to arrange payment.</p><a class="btn" href="account.html#orders">My Orders</a></div>`;
+    view.innerHTML = `<div class="gate"><p>${tr('Online payment details are not available yet. Your order {id} is saved – please contact us on {phone} to arrange payment.', { id: `<strong>${order.id}</strong>`, phone: `<strong>${esc(info.company.phone)}</strong>` })}</p><a class="btn" href="account.html#orders">${tr('My Orders')}</a></div>`;
     return;
   }
   view.innerHTML = `
@@ -110,7 +110,7 @@ async function stepPay() {
       <div class="pay-card">
         <h3>${esc(m.label)}</h3>
         <p class="muted small">${esc(m.hint)}</p>
-        <button type="button" class="btn full" id="scBtn">Pay ${money(order.total)} with SkipCash <b>&rarr;</b></button>
+        <button type="button" class="btn full" id="scBtn">${esc(tr('Pay {amount} with SkipCash', { amount: money(order.total) }))} <b>&rarr;</b></button>
         <p class="note" id="scNote"></p>
       </div>`).join('')}
   </div>
@@ -118,7 +118,7 @@ async function stepPay() {
   const ap = $('#apBtn'); if (ap) ap.addEventListener('click', startApplePay);
   const sc = $('#scBtn'); if (sc) sc.addEventListener('click', startSkipCash);
   $('#cancelOrder').addEventListener('click', async () => {
-    if (!confirm('Cancel this order?')) return;
+    if (!confirm(tr('Cancel this order?'))) return;
     try { await api(`/orders/${order.id}/cancel`, { method: 'POST' }); toast('Order cancelled'); location.href = 'account.html#orders'; } catch (err) { toast(err.message); }
   });
 }
@@ -132,7 +132,7 @@ async function startSkipCash() {
     location.href = r.url;                                     // leaves this website for SkipCash's page
   } catch (err) {
     note.className = 'note err'; note.textContent = err.message;
-    b.disabled = false; b.innerHTML = `Pay ${money(order.total)} with SkipCash <b>&rarr;</b>`;
+    b.disabled = false; b.innerHTML = `${esc(tr('Pay {amount} with SkipCash', { amount: money(order.total) }))} <b>&rarr;</b>`;
   }
 }
 
@@ -165,18 +165,27 @@ function startApplePay() {
 }
 
 /* ---------- Step 3: done ---------- */
+/* The values for the thank-you sentences (the order number, amount and method are shown in bold) */
+const doneVars = () => ({ id: `<strong>${order.id}</strong>`, amount: `<strong>${money(order.total)}</strong>`, method: esc(order.method || '') });
 function stepDone() {
   setStep(3);
   view.innerHTML = `<div class="done">
     <div class="tick">&#10003;</div>
-    <h3>Thank you, ${esc(order.delivery.name)}!</h3>
+    <h3>${esc(tr('Thank you, {name}!', { name: order.delivery.name }))}</h3>
     ${order.status === 'Payment confirmed'
-      ? `<p>Your payment for order <strong>${order.id}</strong> (<strong>${money(order.total)}</strong> via ${esc(order.method || '')}) was received and <strong>confirmed</strong>. We are getting your order ready.</p>`
-      : `<p>We received the payment details for order <strong>${order.id}</strong> (<strong>${money(order.total)}</strong> via ${esc(order.method || '')}).</p>
-         <p><strong>Your order is not confirmed yet.</strong> It becomes confirmed as soon as our team verifies the payment (usually within a few hours). You will see the status change in My Orders.</p>`}
-    <p class="muted small">You can follow every step of your order in <strong>My Account &rarr; My Orders</strong>.</p>
+      ? `<p>${tr('Your payment for order {id} ({amount} via {method}) was received and confirmed. We are getting your order ready.', doneVars())}</p>`
+      : `<p>${tr('We received the payment details for order {id} ({amount} via {method}).', doneVars())}</p>
+         <p><strong>${tr('Your order is not confirmed yet.')}</strong> ${tr('It becomes confirmed as soon as our team verifies the payment (usually within a few hours). You will see the status change in My Orders.')}</p>`}
+    <p class="muted small">${tr('You can follow every step of your order in')} <strong>${tr('My Account → My Orders')}</strong>.</p>
     <div class="done-btns"><a class="btn" href="account.html#orders">Track My Order</a><a class="btn ghost" href="index.html#shop">Continue Shopping</a></div></div>`;
 }
+
+/* ---------- Language switch: the pay and thank-you steps are drawn again in the new language ---------- */
+window.addEventListener('langchange', () => {
+  if (!order) return;                        // the delivery step is translated in place
+  if ($('.pay-choice')) stepPay();
+  else if ($('.done')) stepDone();
+});
 
 /* ---------- Start ---------- */
 (async function init() {

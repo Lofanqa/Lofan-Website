@@ -12,10 +12,10 @@ em{font-style:italic;color:var(--sage)}
 h1,h2,h3{font-family:var(--serif);font-weight:400;line-height:1.1}
 
 /* top bar */
-.topbar{background:var(--sage);color:#f4efe7;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:8px 48px;font-size:11px;letter-spacing:.2em;text-transform:uppercase}
+.topbar{background:var(--sage);color:#f4efe7;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:8px 48px;font-size:13px;letter-spacing:.2em;text-transform:uppercase}
 .topbar nav{justify-self:end;display:flex;gap:14px;align-items:center}
 .topbar nav i{opacity:.5;font-style:normal}
-.topbar button{letter-spacing:.2em;text-transform:uppercase;font-size:11px}
+.topbar button{letter-spacing:.2em;text-transform:uppercase;font-size:13px}
 .topbar a:hover,.topbar button:hover{opacity:.7}
 
 /* header */
@@ -801,3 +801,114 @@ body.has-cart-bar .toast{bottom:96px}
 /* the Settings section headings used for the online payment blocks */
 h4{font-size:22px}
 @media(max-width:700px){.cart-bar{padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px))}.cb-info span{font-size:19px}.cart-bar .btn{padding:11px 12px;font-size:10px;letter-spacing:.12em}}
+
+/* ===== English / Arabic (v14): the Arabic pages are right-to-left and use the Cairo font ===== */
+#langBtn{font-family:'Cairo',system-ui,sans-serif;letter-spacing:0;text-transform:none;font-size:12px}
+.topbar nav{white-space:nowrap;gap:10px;letter-spacing:.12em}   /* the top-bar links never break onto two lines */
+.topbar p{letter-spacing:.14em}
+/* top bar: the shipping note is centred and the menu keeps its place on the right. Narrower desktops give the note its own centred
+   line above the menu, so the menu never runs into it. Phones keep their own layout (see the phone section below). */
+@media (min-width:1366px){body:not(.admin) .topbar{grid-template-columns:1fr auto 1fr}body:not(.admin) .topbar p{justify-self:center;margin:0}}
+@media (min-width:801px) and (max-width:1365px){body:not(.admin) .topbar{grid-template-columns:1fr}body:not(.admin) .topbar>span{display:none}body:not(.admin) .topbar p{grid-column:1;justify-self:center;text-align:center;margin:0 0 6px}body:not(.admin) .topbar nav{grid-column:1;justify-self:end}}
+.topbar nav button,.topbar nav a{white-space:nowrap}
+html[lang="ar"]{--serif:'Cairo',Georgia,serif;--sans:'Cairo',system-ui,sans-serif}
+html[lang="ar"] body{font-weight:400;line-height:1.9}
+html[lang="ar"] *{letter-spacing:0 !important;text-transform:none !important}
+html[lang="ar"] em{font-style:normal;font-weight:500}
+html[lang="ar"] h1,html[lang="ar"] h2,html[lang="ar"] h3{line-height:1.45}
+html[dir="rtl"] #searchClear{right:auto;left:10px}
+html[dir="rtl"] .modal-x{right:auto;left:18px}
+html[dir="rtl"] .modal.wide .modal-x{right:auto;left:10px}
+html[dir="rtl"] .popups{right:auto;left:20px}
+html[dir="rtl"] .chat-fab{right:auto;left:22px}
+html[dir="rtl"] .chat-fab .badge{right:auto;left:-8px}
+html[dir="rtl"] .badge{margin-left:0;margin-right:4px}
+html[dir="rtl"] .chat-loc{border-right:0;border-left:1px solid #e2dccb}
+html[dir="rtl"] .s-btn.prev{left:auto;right:8px}
+html[dir="rtl"] .s-btn.next{right:auto;left:8px}
+html[dir="rtl"] .msg.me .msg-x{left:auto;right:-28px}
+html[dir="rtl"] .msg.them .msg-x{right:auto;left:-28px}
+html[dir="rtl"] .hero h1 em{margin-left:0;margin-right:.9em}
+html[dir="rtl"] input[type="email"],html[dir="rtl"] input[type="tel"],html[dir="rtl"] input[inputmode="tel"],html[dir="rtl"] input[inputmode="numeric"],html[dir="rtl"] input[type="password"]{direction:ltr;text-align:right}   /* e-mails, numbers and passwords read left to right */
+html[dir="rtl"] .hero-text,html[dir="rtl"] .hero-text *{text-align:left}   /* the photo has its logo on the right, so the text stays on the left */
+html[dir="rtl"] .btn b{display:inline-block;transform:scaleX(-1);margin-left:0;margin-right:8px}
+html[dir="rtl"] .cat b{display:inline-block;transform:scaleX(-1)}
+html[dir="rtl"] .steps li+li::after{left:auto;right:-14px}
+html[dir="rtl"] .track li::before{left:auto;right:-50%}
+html[dir="rtl"] .pw-rules li::before{margin-right:0;margin-left:6px}
+html[dir="rtl"] .cl-right{text-align:left}
+html[dir="rtl"] .steps li::before{margin-right:0;margin-left:10px}
+html[dir="rtl"] .ord.unread{border-left:0;border-right:3px solid var(--sage)}
+html[dir="rtl"] .notif.unread{border-left:0;border-right:3px solid var(--sage)}
+html[dir="rtl"] .loc-line{border-left:0;border-right:3px solid var(--sage)}
+html[dir="rtl"] .pop{border-left:0;border-right:5px solid var(--sage)}
+html[dir="rtl"] .set-warn,html[dir="rtl"] .err-note,html[dir="rtl"] .del-box,html[dir="rtl"] .chg{border-left:0;border-right:3px solid #c07a1d}
+html[dir="rtl"] .set-ok{border-left:0;border-right:3px solid #5a8a3c}
+@media(min-width:801px){html[dir="rtl"] .chat-panel{right:auto;left:22px}}
+@media(max-width:700px){html[dir="rtl"] .track li{padding:0 30px 18px 0}html[dir="rtl"] .track li i{left:auto;right:0}html[dir="rtl"] .track li::before{left:auto;right:6px}}
+
+/* ===== Animations (v14): gentle, in the same sage and cream colours; switched off when the device asks for less motion ===== */
+@keyframes lf-rise{from{opacity:0;translate:0 26px}to{opacity:1;translate:0 0}}
+@keyframes lf-wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes lf-soft-zoom{from{transform:scale(1.07)}to{transform:scale(1)}}
+@keyframes lf-sheen{from{transform:translateX(-120%) skewX(-18deg)}to{transform:translateX(260%) skewX(-18deg)}}
+@keyframes lf-slide-up{from{opacity:0;translate:0 100%}to{opacity:1;translate:0 0}}
+.hero-img{animation:lf-soft-zoom 12s ease-in-out infinite alternate}   /* the photo keeps breathing: a slow zoom in and out, forever */
+.hero-text>*{animation:lf-rise 1s cubic-bezier(.2,.7,.2,1) both}
+.hero-text>*:nth-child(2){animation-delay:.12s}
+.hero-text>*:nth-child(3){animation-delay:.24s}
+.hero-text>*:nth-child(4){animation-delay:.36s}
+.hero-text>*:nth-child(5){animation-delay:.48s}
+.hero-text>*:nth-child(6){animation-delay:.6s}
+.hero-text .rule{animation:lf-wipe 1.1s .5s cubic-bezier(.2,.7,.2,1) both}
+.cart-bar:not([hidden]){animation:lf-slide-up .45s cubic-bezier(.2,.7,.2,1) both}
+.btn{position:relative;overflow:hidden}
+.btn::after{content:"";position:absolute;top:0;bottom:0;left:0;width:45%;background:linear-gradient(90deg,transparent,rgba(244,239,231,.4),transparent);transform:translateX(-120%) skewX(-18deg);pointer-events:none}
+.btn:hover::after{animation:lf-sheen .9s ease}
+.section>h2.center{position:relative;padding-bottom:22px}
+.section>h2.center::after{content:"";position:absolute;left:50%;bottom:0;width:132px;margin-left:-66px;border-top:2px dashed var(--sage);opacity:.6}
+@supports (animation-timeline: view()) {
+  /* things scroll into view and rise softly; the stitch line under each heading is drawn as you reach it */
+  .cats .cat,.card,.story-video,.story-text>*,.enq-img,.enq-form>*,.contact-grid>div,.contact-wa{
+    animation:lf-rise linear both;animation-timeline:view();animation-range:entry 4% cover 34%}
+  .section>h2.center::after{animation:lf-wipe linear both;animation-timeline:view();animation-range:entry 0% cover 40%}
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none !important;transition:none !important}
+}
+
+/* ===== v15: menu hover, sparkling centre logo, language blink ===== */
+/* menu items: a thin line sweeps under the item on hover; the items do not move */
+.nav a,.topbar nav button,.topbar nav a{position:relative}
+.nav a::after,.topbar nav button::after,.topbar nav a::after{content:"";position:absolute;left:10%;right:10%;bottom:-4px;height:1px;background:currentColor;transform:scaleX(0);transform-origin:center;transition:transform .45s cubic-bezier(.2,.7,.2,1);pointer-events:none}
+.nav a:hover::after,.nav a:focus-visible::after,.topbar nav button:hover::after,.topbar nav button:focus-visible::after,.topbar nav a:hover::after,.topbar nav a:focus-visible::after{transform:scaleX(1)}
+.topbar nav button,.topbar nav a{transition:transform .3s ease,opacity .3s ease}
+.topbar nav button:hover,.topbar nav a:hover{transform:translateY(-1px)}
+/* the centre logo: a glint crosses the photo now and then, and small sparkles twinkle on it */
+.brand .logo-wrap{position:relative;display:block;width:max-content;margin:0 auto;overflow:hidden}
+.brand .logo-wrap img{display:block}
+.brand .glint{position:absolute;top:0;bottom:0;left:0;width:55%;background:linear-gradient(100deg,transparent 0%,rgba(255,255,255,.9) 50%,transparent 100%);transform:translateX(-120%) skewX(-16deg);animation:lf-glint 5.5s ease-in-out infinite;pointer-events:none}
+@keyframes lf-glint{0%{transform:translateX(-120%) skewX(-16deg)}28%,100%{transform:translateX(240%) skewX(-16deg)}}
+.brand .spark{position:absolute;width:13px;height:13px;background:#fffdf7;clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%);filter:drop-shadow(0 0 3px rgba(115,122,88,.8));opacity:0;pointer-events:none;animation:lf-twinkle 3.6s ease-in-out infinite}
+.brand .s1{top:8%;left:12%}
+.brand .s2{top:56%;right:9%;width:10px;height:10px;animation-delay:1.1s}
+.brand .s3{top:6%;right:27%;width:7px;height:7px;animation-delay:2.2s}
+@keyframes lf-twinkle{0%,100%{opacity:0;transform:scale(0) rotate(0deg)}14%{opacity:1;transform:scale(1) rotate(45deg)}28%{opacity:0;transform:scale(.25) rotate(90deg)}}
+/* switching language: the screen flashes to the background colour for 0.2 s, then the new language appears */
+.lang-blink{position:fixed;inset:0;z-index:300;background:var(--cream);pointer-events:none;animation:lf-blink .2s steps(1,end) forwards}
+@keyframes lf-blink{from{opacity:1}to{opacity:0}}
+@media (prefers-reduced-motion: reduce){.brand .glint,.brand .spark{animation:none;opacity:0}}
+
+/* ===== v15: phones. Checked at 430 x 932 (iPhone 15 Plus / Pro Max), 412 x 915 (Galaxy S24+) and 384 x 854 (smaller phones) ===== */
+@media (max-width:480px){
+  .s-btn{width:40px;height:40px;line-height:38px;font-size:26px}   /* photo arrows: easy to tap with a thumb */
+  .rm{padding:10px 8px;min-height:40px}
+  #cdClose{width:44px;height:44px;font-size:30px}
+  .contact-grid a{display:inline-block;padding:8px 0}
+  .cart-bar .btn{flex:0 1 auto;white-space:nowrap;padding:11px 10px;letter-spacing:.06em}   /* each button is as wide as its label */
+  .cb-btns{gap:8px}
+}
+@media (max-width:400px){
+  .topbar nav{gap:6px}
+  .topbar nav button,.topbar nav a{letter-spacing:.06em}
+}

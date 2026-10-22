@@ -480,9 +480,10 @@ function sweep_soldout()
     foreach (q_all("SELECT items FROM orders WHERE status IN ('Awaiting payment','Payment submitted')") as $r)
         foreach (json_decode($r['items'], true) ?: [] as $i) $reserved[(int)$i['id']] = true;
     $gone = 0;
-    foreach (q_all('SELECT id FROM products WHERE stock<=0') as $r) {
+    foreach (q_all("SELECT * FROM products WHERE stock<=0 AND (req_json IS NULL OR req_json='')") as $r) {   // items waiting for approval are kept
         if (isset($reserved[(int)$r['id']])) continue;
         q_exec('DELETE FROM products WHERE id=?', [(int)$r['id']]);
+        remove_product_photos($r);
         $gone++;
     }
     return $gone;
@@ -556,7 +557,7 @@ function payment_info()
     }
     if (skipcash_ready($p['skipcash'] ?? [])) {
         $methods[] = ['id' => 'skipcash', 'label' => 'SkipCash', 'redirect' => true,
-            'hint' => 'You will be taken to the secure SkipCash payment page to pay with your card or SkipCash wallet. Your order is confirmed as soon as the payment is approved.',
+            'hint' => 'You will be taken to the secure SkipCash payment page to pay with your debit or credit card or SkipCash wallet. Your order is confirmed as soon as the payment is approved.',
             'details' => []];
     }
     return ['company' => $s['company'], 'currency' => CURRENCY, 'methods' => $methods];

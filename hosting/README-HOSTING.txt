@@ -225,7 +225,7 @@ STEP 7  Share it
 
   Owner: everything – Company & Payments (SkipCash, Apple Pay, e-mail, reply text, alerts), Security (who is signed in, admin accounts,
   activity log, reset of test data), approvals, and all orders, products, chat and enquiries.
-  Staff: Orders, Products & Stock (stock and "show in shop" directly; prices and details need the owner's approval),
+  Staff: Orders, Products & Stock (products are changed directly; a new item or a deletion waits for the owner's approval in Products & Stock),
   Notifications, Chat, Enquiries and Customers. Security shows only THEIR OWN page: sign out of this device, sign out
   other devices, change their password and reset it by e-mail code. Company & Payments is hidden.
   Approvals: when staff ask for something (delete an order, change an item, add a new item), the owner sees it in

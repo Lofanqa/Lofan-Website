@@ -220,7 +220,6 @@ function purge_order($r)
 }
 
 /* ------------------------------------------------------------------ products: photos, details, owner-approved changes */
-const PRODUCT_MAX_PHOTOS = 8;
 function save_product_photos($list, $nameForSlug)
 {
     $paths = [];
@@ -233,6 +232,16 @@ function save_product_photos($list, $nameForSlug)
         $paths[] = 'images/products/' . $fn;
     }
     return $paths;
+}
+/* Deletes the photo files of a removed item, but only the ones no other item still uses (seed items share a few photos).
+   This keeps the server storage tidy when items are deleted. */
+function remove_product_photos($row)
+{
+    foreach (product_images($row) as $path) {
+        if (strpos($path, 'images/products/') !== 0 || strpos($path, '..') !== false) continue;
+        if (q_val('SELECT 1 FROM products WHERE img=? OR images LIKE ? LIMIT 1', [$path, '%' . $path . '%'])) continue;
+        @unlink(root_dir() . '/' . $path);
+    }
 }
 /* Validates an item edit and returns ONLY the fields that were sent. */
 function product_changes($in, $row)
@@ -266,7 +275,6 @@ function product_changes($in, $row)
         foreach ($list as $it) {
             if (is_string($it) && strpos($it, 'data:') !== 0) { if (in_array($it, $cur, true) && !in_array($it, $all, true)) $all[] = $it; }
             else $all = array_merge($all, save_product_photos([$it], $slug));
-            if (count($all) > PRODUCT_MAX_PHOTOS) throw new ApiError(400, 'An item can have up to ' . PRODUCT_MAX_PHOTOS . ' photos.');
         }
         if (!$all) throw new ApiError(400, 'An item needs at least one photo.');
         $c['images'] = $all;
