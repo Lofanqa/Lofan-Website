@@ -1,17 +1,14 @@
-
 name: Deploy to QHost via FTP
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Upload files via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
@@ -21,9 +18,6 @@ jobs:
           password: ${{ secrets.FTP_PASSWORD }}
           protocol: ftps
           port: 21
-          timeout: 60000
-          log-level: verbose
-          security: loose
           local-dir: ./
           server-dir: ./
           exclude: |
