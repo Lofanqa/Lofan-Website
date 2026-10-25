@@ -8,7 +8,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Upload files via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
@@ -16,8 +17,11 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
+          protocol: ftp
           port: 21
+          security: loose
+          timeout: 60000
+          log-level: verbose
           local-dir: ./
           server-dir: ./
           exclude: |
